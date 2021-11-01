@@ -1,0 +1,47 @@
+import os
+import sys
+from fathomnet.api import boundingboxes
+from json_loader import Taxonomicon
+import pprint
+
+
+def build_taxa_tree(concept, taxonomicon=None):
+    if taxonomicon is None:
+        taxonomicon = Taxonomicon()
+    node = {
+        'name': concept,
+        'rank': taxonomicon.get_rank(concept),
+        'children': [],
+        'bb_count': boundingboxes.count_by_concept(concept).count
+    }
+    for child in taxonomicon.get_children(concept):
+        subtree = build_taxa_tree(child['name'], taxonomicon)
+        node['children'].append(subtree)
+        node['bb_count'] += subtree['bb_count']
+    return node
+
+
+def rank_bb_counts(rank, root_concept='Animalia', tree=None):
+    counts = []
+    if tree is None:
+        tree = build_taxa_tree(root_concept)
+    stack = [tree]
+    while stack:
+        top = stack.pop()
+        if top['rank'] == rank:
+            counts.append((top['name'], top['bb_count']))
+        else:
+            for child in top['children']:
+                stack.append(child)
+    return counts
+
+
+if __name__ == '__main__':
+    trees = [build_taxa_tree(concept) for concept in ('Cnidaria', 'Porifera', 'Echinodermata', 'Tunicata')]
+    bb_counts_family = [rank_bb_counts('family', tree=tree) for tree in trees]
+    combined = bb_counts_family[0] + bb_counts_family[1] + bb_counts_family[2] + bb_counts_family[3]
+
+    print("Top 100:")
+    for name, count in sorted(combined, key=lambda x: x[1])[-100:][::-1]:
+        print(name, ':', count)
+

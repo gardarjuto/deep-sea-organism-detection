@@ -9,13 +9,14 @@ from torch.utils.data import DataLoader
 from utils import models
 from utils import trainingtools
 from utils.datasets import FathomNetDataset
+import logging
 
 
 def get_args_parser(add_help=True):
     parser = argparse.ArgumentParser(description="Marine Organism Object Detection Training", add_help=add_help)
 
     parser.add_argument("--data-path", default="data", type=str, help="dataset path")
-    parser.add_argument("--class-path", default="classes.json", type=str, help="path to class definitions")
+    parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
     parser.add_argument("--dataset", default="FathomNet", type=str, help="dataset name")
     parser.add_argument("--model", default="rcnn_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
@@ -51,7 +52,6 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
     )
-    parser.add_argument("--print-progress", dest="print_progress", help="print training progress", action="store_true")
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
@@ -67,24 +67,40 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo", action="store_true"
     )
-    parser.add_argument("--print-every", "--pe", default=10, type=int, help="print every ith batch")
+    parser.add_argument("--log-file", "--lf", default=None, type=str, help="path to file for writing logs. If "
+                                                                           "omitted, writes to stdout")
+    parser.add_argument("--log-level", default="ERROR", help="log level: (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
 
     return parser
+
+
+def initialise_logging(log_file, log_level):
+    level = getattr(logging, log_level.upper(), None)
+    if not isinstance(level, int):
+        raise ValueError(f"Invalid log level: {log_level}")
+    if log_file:
+        logging.basicConfig(filename=log_file, filemode='w', level=level, format='%(asctime)s %(message)s',
+                            datefmt='%I:%M:%S %p')
+    else:
+        logging.basicConfig(level=level, format='%(asctime)s %(message)s', datefmt='%I:%M:%S %p')
 
 
 def main(args):
     # TODO: Check arguments
 
+    initialise_logging(args.log_file, args.log_level)
+    logging.info("Started")
+
     # Parse class definition file
-    print("Loading class definitions...")
-    with open(args.class_path) as f:
+    logging.info("Loading class definitions...")
+    with open(args.class_file) as f:
         classes = json.load(f)
     num_classes = len(classes) + 1
-    print(f"Training with {num_classes} classes:")
-    print(", ".join(['background'] + list(classes.keys())))
+    logging.info(f"Training with {num_classes} classes: " + ", ".join(['background'] + list(classes.keys())))
 
     # Load data
-    print("Loading dataset...")
+    logging.info("Loading dataset...")
     dataset = FathomNetDataset(root=args.data_path, classes=classes,
                                transforms=trainingtools.get_transforms(train=True))
 
@@ -98,8 +114,9 @@ def main(args):
                              collate_fn=trainingtools.collate_fn)
 
     # Load model
-    print("Loading model...")
     device = torch.device(args.device)
+    logging.info("Using device:", device)
+    logging.info("Loading model...")
     model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained, device=device)
 
     # Observe that all parameters are being optimized
@@ -109,13 +126,13 @@ def main(args):
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=args.lr_step_size, gamma=args.lr_gamma)
 
     # Train the model
-    print("Beginning training:")
+    logging.info("Beginning training:")
     sample_image = '010b0dfe-8ae8-4f62-8516-1d96085c33e6.png'
 
     for epoch in range(1, args.epochs + 1):
         # Train one epoch
         trainingtools.train_one_epoch(model, train_loader, device=device, optimiser=optimiser,
-                                      epoch=epoch, n_epochs=args.epochs, print_every=args.print_every)
+                                      epoch=epoch, n_epochs=args.epochs, log_every=args.log_every)
 
         # Evaluate on the test data
         # trainingtools.evaluate(model, test_loader, device=device)
@@ -126,6 +143,7 @@ def main(args):
     sample_pred = trainingtools.visualise_prediction(model, device, sample_image, dataset)
     plt.imshow(sample_pred)
     plt.savefig(os.path.join(args.output_dir, 'sample_pred.png'))
+    logging.info("Finished")
 
 
 if __name__ == '__main__':

@@ -115,7 +115,7 @@ def main(args):
 
     # Load model
     device = torch.device(args.device)
-    logging.info("Using device:", device.type[0])
+    logging.info(f"Using device: {device}")
     logging.info("Loading model...")
     model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained, device=device)
 

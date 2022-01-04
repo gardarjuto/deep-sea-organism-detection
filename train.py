@@ -67,6 +67,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo", action="store_true"
     )
+    parser.add_argument("--print-every", "--pe", default=10, type=int, help="print every ith batch")
 
     return parser
 
@@ -75,9 +76,12 @@ def main(args):
     # TODO: Check arguments
 
     # Parse class definition file
+    print("Loading class definitions...")
     with open(args.class_path) as f:
         classes = json.load(f)
-    num_classes = len(classes)
+    num_classes = len(classes) + 1
+    print(f"Training with {num_classes} classes:")
+    print(", ".join(['background'] + list(classes.keys())))
 
     # Load data
     print("Loading dataset...")
@@ -108,10 +112,11 @@ def main(args):
     print("Beginning training:")
     sample_image = '010b0dfe-8ae8-4f62-8516-1d96085c33e6.png'
 
-    for epoch in range(args.epochs):
+    for epoch in range(1, args.epochs + 1):
         # Train one epoch
         trainingtools.train_one_epoch(model, train_loader, device=device, optimiser=optimiser,
-                                      progress=args.print_progress, epoch=epoch, n_epochs=args.epochs)
+                                      epoch=epoch, n_epochs=args.epochs, print_every=args.print_every)
+
         # Evaluate on the test data
         # trainingtools.evaluate(model, test_loader, device=device)
 

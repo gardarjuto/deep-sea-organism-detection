@@ -12,7 +12,7 @@ class FathomNetDataset(torch.utils.data.Dataset):
         self.transforms = transforms
         self.imgs = list(sorted(os.listdir(os.path.join(root, 'images'))))
         self.anns = list(sorted(os.listdir(os.path.join(root, 'annotations'))))
-        self.label_mapping = {cls: i for (i, cls) in enumerate(sorted(classes))}
+        self.label_mapping = {cls: i+1 for (i, cls) in enumerate(sorted(classes))}
 
         tax = Taxonomicon()
 

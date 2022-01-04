@@ -9,14 +9,15 @@ from torchvision.transforms import transforms, functional
 from torchvision.utils import draw_bounding_boxes
 
 
-def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, progress=True):
+def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, print_every=None):
     model.train()
 
     total_loss_classifier = 0.0
     total_loss_box_reg = 0.0
     total_loss_objectness = 0.0
     total_loss_rpn_box_reg = 0.0
-    for images, targets in loader:
+
+    for i, (images, targets) in enumerate(loader, start=1):
         images = list(image.to(device) for image in images)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         # if not any([len(target['labels']) > 0 for target in targets]):
@@ -42,7 +43,10 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, progress=
         losses.backward()
         optimiser.step()
 
-    print(f'Epoch {epoch}/{n_epochs}:')
+        if print_every and i % print_every == 0:
+            print(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  " + ", ".join([f"{loss_type}: {loss.item():.3f}" for loss_type, loss in loss_dict]))
+
+    print(f'Summary:')
     print(f'\tloss_classifier (mean): {total_loss_classifier / len(loader):.3f}, '
           f'loss_box_reg: {total_loss_box_reg / len(loader):.3f}, '
           f'loss_objectness: {total_loss_objectness / len(loader):.3f}, '

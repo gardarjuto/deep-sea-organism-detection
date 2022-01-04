@@ -30,13 +30,13 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, progress=
 
         if not math.isfinite(loss_value):
             print(f"Loss is {loss_value}, stopping training")
-            print(loss_dict_reduced)
+            print(loss_dict)
             sys.exit(1)
 
-        total_loss_classifier += loss_dict_reduced['loss_classifier']
-        total_loss_box_reg += loss_dict_reduced['loss_box_reg']
-        total_loss_objectness += loss_dict_reduced['loss_objectness']
-        total_loss_rpn_box_reg += loss_dict_reduced['loss_rpn_box_reg']
+        total_loss_classifier += loss_dict['loss_classifier']
+        total_loss_box_reg += loss_dict['loss_box_reg']
+        total_loss_objectness += loss_dict['loss_objectness']
+        total_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg']
 
         optimiser.zero_grad()
         losses.backward()

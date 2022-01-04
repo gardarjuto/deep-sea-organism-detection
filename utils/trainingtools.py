@@ -44,7 +44,8 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, print_eve
         optimiser.step()
 
         if print_every and i % print_every == 0:
-            print(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  " + ", ".join([f"{loss_type}: {loss.item():.3f}" for loss_type, loss in loss_dict]))
+            print(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  " +
+                  ", ".join([f"{loss_type}: {loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
 
     print(f'Summary:')
     print(f'\tloss_classifier (mean): {total_loss_classifier / len(loader):.3f}, '

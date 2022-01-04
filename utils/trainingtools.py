@@ -48,10 +48,10 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
                          ", ".join([f"{loss_type}: {loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
 
     logging.info(f'Summary:')
-    logging.info(f'\tloss_classifier (mean): {total_loss_classifier / len(loader):.3f}, '
-                 f'loss_box_reg: {total_loss_box_reg / len(loader):.3f}, '
-                 f'loss_objectness: {total_loss_objectness / len(loader):.3f}, '
-                 f'loss_rpn_box_reg (mean): {total_loss_rpn_box_reg / len(loader):.3f}')
+    logging.info(f'\tloss_classifier (mean): {total_loss_classifier.item() / len(loader):.3f}, '
+                 f'loss_box_reg: {total_loss_box_reg.item() / len(loader):.3f}, '
+                 f'loss_objectness: {total_loss_objectness.item() / len(loader):.3f}, '
+                 f'loss_rpn_box_reg (mean): {total_loss_rpn_box_reg.item() / len(loader):.3f}')
 
 
 def visualise_prediction(model, device, img_name, dataset, show_ground_truth=True):

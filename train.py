@@ -71,6 +71,7 @@ def get_args_parser(add_help=True):
                                                                            "omitted, writes to stdout")
     parser.add_argument("--log-level", default="ERROR", help="log level: (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
+    parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
 
     return parser
 
@@ -123,6 +124,8 @@ def main(args):
     params = [p for p in model.parameters() if p.requires_grad]
     optimiser = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
+    scaler = torch.cuda.amp.GradScaler() if args.amp else None
+
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=args.lr_step_size, gamma=args.lr_gamma)
 
     # Train the model
@@ -132,7 +135,7 @@ def main(args):
     for epoch in range(1, args.epochs + 1):
         # Train one epoch
         trainingtools.train_one_epoch(model, train_loader, device=device, optimiser=optimiser,
-                                      epoch=epoch, n_epochs=args.epochs, log_every=args.log_every)
+                                      epoch=epoch, n_epochs=args.epochs, log_every=args.log_every, scaler=scaler)
 
         # Evaluate on the test data
         # trainingtools.evaluate(model, test_loader, device=device)

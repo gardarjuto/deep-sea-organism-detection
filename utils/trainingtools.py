@@ -9,7 +9,7 @@ from torchvision.utils import draw_bounding_boxes
 import logging
 
 
-def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every=None):
+def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every=None, scaler=None):
     model.train()
 
     total_loss_classifier = 0.0
@@ -23,7 +23,7 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
         # if not any([len(target['labels']) > 0 for target in targets]):
         #     print("Continuing")
         #     continue
-        with torch.cuda.amp.autocast(enabled=False):
+        with torch.cuda.amp.autocast(enabled=scaler is not None):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
 
@@ -40,8 +40,13 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
         total_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg']
 
         optimiser.zero_grad()
-        losses.backward()
-        optimiser.step()
+        if scaler is not None:
+            scaler.scale(losses).backward()
+            scaler.step(optimiser)
+            scaler.update()
+        else:
+            losses.backward()
+            optimiser.step()
 
         if log_every and i % log_every == 0:
             logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  " +
@@ -59,6 +64,7 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
     idx = dataset.index_of(img_name)
     img, targets = dataset[idx]
     img = [img.to(device)]
+    targets = {k: v.to(device) for k, v in targets.items()}
     prediction = model(img)[0]
     boxes = prediction['boxes']
     labels = ['pred_(' + dataset.from_label(lab) + ')' for lab in prediction['labels'].tolist()]

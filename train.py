@@ -81,7 +81,7 @@ def main(args):
 
     # Parse class definition file
     logging.info("Loading class definitions...")
-    with open(args.class_file) as f:
+    with open(args.class_file, "r") as f:
         classes = json.load(f)
     num_classes = len(classes) + 1
     logging.info(f"Training with {num_classes} classes: " + ", ".join(['background'] + list(classes.keys())))

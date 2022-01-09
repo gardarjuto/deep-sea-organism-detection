@@ -155,7 +155,7 @@ def main(args):
             }
             if args.amp:
                 checkpoint["scaler"] = scaler.state_dict()
-            utils.save_state(checkpoint, args.output_dir, epoch, args.distributed)
+            utils.save_state(checkpoint, args.output_dir, epoch)
 
         # Evaluate on the test data
         # trainingtools.evaluate(model, test_loader, device=device)

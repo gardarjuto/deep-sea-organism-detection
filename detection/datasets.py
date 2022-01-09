@@ -160,15 +160,13 @@ class RandomHorizontalFlip(transforms.RandomHorizontalFlip):
 
 def load_datasets(name, root, classes, train_ratio):
     if name == 'FathomNet':
-        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
-        test_transforms = Compose([ToTensor()])
-        dataset = FathomNetDataset(root=root, classes=classes)
+        # train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
+        transforms = Compose([ToTensor()])
+        dataset = FathomNetDataset(root=root, classes=classes, transforms=transforms)
 
         train_size = int(len(dataset) * train_ratio)
         test_size = len(dataset) - train_size
         train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-        train_dataset.set_transforms(train_transforms)
-        test_dataset.set_transforms(test_transforms)
     else:
         raise NotImplementedError
     return train_dataset, test_dataset

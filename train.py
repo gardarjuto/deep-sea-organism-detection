@@ -4,11 +4,12 @@ import os
 
 import matplotlib.pyplot as plt
 import torch
+from torch import nn
 from torch.utils.data import DataLoader
 
-from utils import models
-from utils import trainingtools
-from utils.datasets import FathomNetDataset
+from detection import models, utils, datasets
+from detection import trainingtools
+from detection.datasets import FathomNetDataset
 import logging
 
 
@@ -27,6 +28,8 @@ def get_args_parser(add_help=True):
         "-b", "--batch-size", default=2, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
     parser.add_argument("--epochs", default=5, type=int, metavar="N", help="number of total epochs to run")
+    parser.add_argument("--checkpoint", default=None, type=str, help="path of stored checkpoint")
+    parser.add_argument("--start-epoch", default=0, type=int, help="start epoch")
     parser.add_argument(
         "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
     )
@@ -40,14 +43,7 @@ def get_args_parser(add_help=True):
         dest="weight_decay",
     )
     parser.add_argument(
-        "--lr-scheduler", default="multisteplr", type=str, help="name of lr scheduler (default: multisteplr)"
-    )
-    parser.add_argument(
         "--lr-step-size", default=8, type=int, help="decrease lr every step-size epochs (multisteplr scheduler only)"
-    )
-    parser.add_argument(
-        "--lr-steps", default=[16, 22], nargs="+", type=int,
-        help="decrease lr every step-size epochs (multisteplr scheduler only)",
     )
     parser.add_argument(
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
@@ -56,9 +52,6 @@ def get_args_parser(add_help=True):
     parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
     parser.add_argument("--rpn-score-thresh", default=None, type=float, help="rpn score threshold for faster-rcnn")
-    parser.add_argument(
-        "--trainable-backbone-layers", default=None, type=int, help="number of trainable layers of backbone"
-    )
     parser.add_argument(
         "--data-augmentation", default="hflip", type=str, help="data augmentation policy (default: hflip)"
     )
@@ -69,28 +62,18 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument("--log-file", "--lf", default=None, type=str, help="path to file for writing logs. If "
                                                                            "omitted, writes to stdout")
-    parser.add_argument("--log-level", default="ERROR", help="log level: (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
 
     return parser
 
 
-def initialise_logging(log_file, log_level):
-    level = getattr(logging, log_level.upper(), None)
-    if not isinstance(level, int):
-        raise ValueError(f"Invalid log level: {log_level}")
-    if log_file:
-        logging.basicConfig(filename=log_file, filemode='w', level=level, format='%(asctime)s %(message)s',
-                            datefmt='%I:%M:%S %p')
-    else:
-        logging.basicConfig(level=level, format='%(asctime)s %(message)s', datefmt='%I:%M:%S %p')
-
-
 def main(args):
     # TODO: Check arguments
 
-    initialise_logging(args.log_file, args.log_level)
+    utils.initialise_distributed(args)
+    utils.initialise_logging(args)
     logging.info("Started")
 
     # Parse class definition file
@@ -102,23 +85,32 @@ def main(args):
 
     # Load data
     logging.info("Loading dataset...")
-    dataset = FathomNetDataset(root=args.data_path, classes=classes,
-                               transforms=trainingtools.get_transforms(train=True))
+    train_dataset, test_dataset = datasets.load_datasets(name=args.dataset, root=args.data_path, classes=classes,
+                                                         train_ratio=args.train_ratio)
 
-    train_size = int(len(dataset) * args.train_ratio)
-    test_size = len(dataset) - train_size
-    train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+    print("Creating data loaders...")
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+    else:
+        train_sampler = torch.utils.data.RandomSampler(train_dataset)
+        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, num_workers=args.workers, shuffle=True,
-                              collate_fn=trainingtools.collate_fn)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, num_workers=args.workers, shuffle=False,
-                             collate_fn=trainingtools.collate_fn)
+    train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
+
+    train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
+                              collate_fn=utils.collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=1, sampler=test_sampler, num_workers=args.workers,
+                             collate_fn=utils.collate_fn)
 
     # Load model
     device = torch.device(args.device)
     logging.info(f"Using device: {device}")
     logging.info("Loading model...")
-    model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained, device=device)
+    model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained)
+    model = model.to(device)
+    if args.distributed:
+        model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
 
     # Observe that all parameters are being optimized
     params = [p for p in model.parameters() if p.requires_grad]
@@ -128,25 +120,42 @@ def main(args):
 
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=args.lr_step_size, gamma=args.lr_gamma)
 
+    if args.checkpoint:
+        logging.info("Resuming from checkpoint...")
+        checkpoint = torch.load(args.checkpoint, map_location="cpu")
+        model.module.load_state_dict(checkpoint["model"])
+        optimiser.load_state_dict(checkpoint["optimiser"])
+        lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+        args.start_epoch = checkpoint["epoch"] + 1
+        if args.amp:
+            scaler.load_state_dict(checkpoint["scaler"])
+
     # Train the model
     logging.info("Beginning training:")
-    sample_image = '010b0dfe-8ae8-4f62-8516-1d96085c33e6.png'
-
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(args.start_epoch, args.epochs):
+        if args.distributed:
+            train_sampler.set_epoch(epoch)
         # Train one epoch
         trainingtools.train_one_epoch(model, train_loader, device=device, optimiser=optimiser,
                                       epoch=epoch, n_epochs=args.epochs, log_every=args.log_every, scaler=scaler)
 
-        # Evaluate on the test data
-        # trainingtools.evaluate(model, test_loader, device=device)
-
         # Update the learning rate
         lr_scheduler.step()
 
-    sample_pred = trainingtools.visualise_prediction(model, device, sample_image, dataset)
-    plt.imshow(sample_pred)
-    plt.savefig(os.path.join(args.output_dir, 'sample_pred.png'))
-    logging.info("Finished")
+        if args.output_dir:
+            checkpoint = {
+                "model": model.module.state_dict(),
+                "optimizer": optimiser.state_dict(),
+                "lr_scheduler": lr_scheduler.state_dict(),
+                "args": args,
+                "epoch": epoch,
+            }
+            if args.amp:
+                checkpoint["scaler"] = scaler.state_dict()
+            utils.save_state(checkpoint, args.output_dir, epoch, args.distributed)
+
+        # Evaluate on the test data
+        # trainingtools.evaluate(model, test_loader, device=device)
 
 
 if __name__ == '__main__':

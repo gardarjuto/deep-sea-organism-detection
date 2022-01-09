@@ -3,7 +3,6 @@ import os
 import sys
 import torch
 from PIL import Image
-from torch import nn
 from torchvision.transforms import transforms, functional
 from torchvision.utils import draw_bounding_boxes
 import logging
@@ -18,7 +17,7 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
     total_loss_rpn_box_reg = 0.0
 
     for i, (images, targets) in enumerate(loader, start=1):
-        images = list(image.to(device) for image in images)
+        images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
         # if not any([len(target['labels']) > 0 for target in targets]):
         #     print("Continuing")
@@ -91,29 +90,3 @@ def evaluate(model, loader, device):
         predictions = [{k: v.to(device) for k, v in t.items()} for t in predictions]
 
         # TODO: Actually evaluate results
-
-
-def collate_fn(batch):
-    return tuple(zip(*batch))
-
-
-class Compose:
-    def __init__(self, transforms):
-        self.transforms = transforms
-
-    def __call__(self, image, target):
-        for t in self.transforms:
-            image, target = t(image, target)
-        return image, target
-
-
-class ToTensor(nn.Module):
-    def forward(self, image, target):
-        image = functional.pil_to_tensor(image)
-        image = functional.convert_image_dtype(image)
-        return image, target
-
-
-def get_transforms(train):
-    tf = [ToTensor()]
-    return Compose(tf)

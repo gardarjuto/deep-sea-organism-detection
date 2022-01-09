@@ -3,7 +3,10 @@ import os
 from PIL import Image
 from xml.etree import ElementTree
 
-from utils.fathomnethelper.json_loader import Taxonomicon
+from torch import nn
+from torchvision.transforms import transforms, functional
+
+from detection.fathomnethelper.json_loader import Taxonomicon
 
 
 class FathomNetDataset(torch.utils.data.Dataset):
@@ -68,6 +71,9 @@ class FathomNetDataset(torch.utils.data.Dataset):
     def from_label(self, label: int):
         return [k for k, v in self.label_mapping.items() if v == label][0]
 
+    def set_transforms(self, transforms):
+        self.transforms = transforms
+
 
 class FathomNetCroppedDataset(torch.utils.data.Dataset):
     def __init__(self, root, classes=None, transforms=None):
@@ -124,3 +130,45 @@ class FathomNetCroppedDataset(torch.utils.data.Dataset):
             img = self.transforms(img)
 
         return img, label
+
+
+class Compose:
+    def __init__(self, transforms):
+        self.transforms = transforms
+
+    def __call__(self, image, target):
+        for t in self.transforms:
+            image, target = t(image, target)
+        return image, target
+
+
+class ToTensor(nn.Module):
+    def forward(self, image, target):
+        image = functional.pil_to_tensor(image)
+        image = functional.convert_image_dtype(image)
+        return image, target
+
+
+class RandomHorizontalFlip(transforms.RandomHorizontalFlip):
+    def forward(self, image, target):
+        if torch.rand(1) < self.p:
+            image = functional.hflip(image)
+            width, _ = functional.get_image_size(image)
+            target["boxes"][:, [0, 2]] = width - target["boxes"][:, [2, 0]]
+        return image, target
+
+
+def load_datasets(name, root, classes, train_ratio):
+    if name == 'FathomNet':
+        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
+        test_transforms = Compose([ToTensor()])
+        dataset = FathomNetDataset(root=root, classes=classes)
+
+        train_size = int(len(dataset) * train_ratio)
+        test_size = len(dataset) - train_size
+        train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+        train_dataset.set_transforms(train_transforms)
+        test_dataset.set_transforms(test_transforms)
+    else:
+        raise NotImplementedError
+    return train_dataset, test_dataset

@@ -66,6 +66,9 @@ def get_args_parser(add_help=True):
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
 
+    # Distributed training
+    parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
+
     return parser
 
 

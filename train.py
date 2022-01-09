@@ -91,7 +91,7 @@ def main(args):
     train_dataset, test_dataset = datasets.load_datasets(name=args.dataset, root=args.data_path, classes=classes,
                                                          train_ratio=args.train_ratio)
 
-    print("Creating data loaders...")
+    logging.info("Creating data loaders...")
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
         test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)

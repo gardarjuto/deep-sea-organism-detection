@@ -19,7 +19,7 @@ def initialise_distributed(args):
 
 
 def initialise_logging(args):
-    level = getattr(args.logging, args.log_level.upper(), None)
+    level = getattr(logging, args.log_level.upper(), None)
     if not isinstance(level, int):
         raise ValueError(f"Invalid log level: {args.log_level}")
     if args.log_file:

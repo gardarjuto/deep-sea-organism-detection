@@ -18,6 +18,7 @@ def initialise_distributed(args):
     torch.cuda.set_device(args.gpu)
     dist.init_process_group(backend='nccl', init_method=args.dist_url, world_size=args.world_size, rank=args.rank,
                             timeout=datetime.timedelta(seconds=20))
+    torch.distributed.barrier()
 
 
 def initialise_logging(args):

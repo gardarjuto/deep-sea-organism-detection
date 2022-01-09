@@ -1,5 +1,6 @@
 import os
 import logging
+import datetime
 import torch
 import torch.cuda
 import torch.distributed as dist
@@ -15,7 +16,8 @@ def initialise_distributed(args):
     args.gpu = int(os.environ["LOCAL_RANK"])
     args.distributed = True
     torch.cuda.set_device(args.gpu)
-    dist.init_process_group(backend='nccl', init_method=args.dist_url, world_size=args.world_size, rank=args.rank)
+    dist.init_process_group(backend='nccl', init_method=args.dist_url, world_size=args.world_size, rank=args.rank,
+                            timeout=datetime.timedelta(seconds=20))
 
 
 def initialise_logging(args):

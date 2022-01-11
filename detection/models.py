@@ -8,5 +8,5 @@ def load_model(name, num_classes, pretrained=False, progress=True):
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     else:
-        raise NotImplementedError
+        raise NotImplementedError('Currently supported model names: rcnn_resnet50_fpn')
     return model

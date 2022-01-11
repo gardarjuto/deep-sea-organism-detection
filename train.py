@@ -22,7 +22,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--model", default="rcnn_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
-        "--train-ratio", "--tr", default=0.7, type=float, help="proportion of dataset to use for training"
+        "--train-ratio", "--tr", default=0.8, type=float, help="proportion of dataset to use for training"
     )
     parser.add_argument(
         "-b", "--batch-size", default=2, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
@@ -60,6 +60,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo", action="store_true"
     )
+    parser.add_argument("--iou-thresh", default=0.5, type=float, help="IoU threshold for evaluation")
     parser.add_argument("--log-file", "--lf", default=None, type=str, help="path to file for writing logs. If "
                                                                            "omitted, writes to stdout")
     parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
@@ -94,10 +95,10 @@ def main(args):
     logging.info("Creating data loaders...")
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+        # test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
-        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
 
@@ -112,8 +113,10 @@ def main(args):
     logging.info("Loading model...")
     model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained)
     model = model.to(device)
+    model_without_ddp = model
     if args.distributed:
         model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
+        model_without_ddp = model.module
 
     # Observe that all parameters are being optimized
     params = [p for p in model.parameters() if p.requires_grad]
@@ -126,7 +129,7 @@ def main(args):
     if args.checkpoint:
         logging.info("Resuming from checkpoint...")
         checkpoint = torch.load(args.checkpoint, map_location="cpu")
-        model.module.load_state_dict(checkpoint["model"])
+        model_without_ddp.load_state_dict(checkpoint["model"])
         optimiser.load_state_dict(checkpoint["optimiser"])
         lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
         args.start_epoch = checkpoint["epoch"] + 1
@@ -145,9 +148,10 @@ def main(args):
         # Update the learning rate
         lr_scheduler.step()
 
-        if args.output_dir:
+        # Save checkpoint
+        if args.output_dir and utils.is_master_process():
             checkpoint = {
-                "model": model.module.state_dict(),
+                "model": model_without_ddp.state_dict(),
                 "optimizer": optimiser.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
                 "args": args,
@@ -158,7 +162,13 @@ def main(args):
             utils.save_state(checkpoint, args.output_dir, epoch)
 
         # Evaluate on the test data
-        # trainingtools.evaluate(model, test_loader, device=device)
+        if utils.is_master_process():
+            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
+                                   log_every=args.log_every)
+
+        if args.distributed:
+            # Wait while master process saves and evaluates
+            torch.distributed.barrier()
 
 
 if __name__ == '__main__':

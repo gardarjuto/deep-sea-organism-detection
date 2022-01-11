@@ -7,6 +7,8 @@ from torchvision.transforms import transforms, functional
 from torchvision.utils import draw_bounding_boxes
 import logging
 
+from detection import utils, evaluation
+
 
 def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every=None, scaler=None):
     model.train()
@@ -19,9 +21,7 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
-        # if not any([len(target['labels']) > 0 for target in targets]):
-        #     print("Continuing")
-        #     continue
+
         with torch.cuda.amp.autocast(enabled=scaler is not None):
             loss_dict = model(images, targets)
             losses = sum(loss for loss in loss_dict.values())
@@ -58,6 +58,7 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
                  f'loss_rpn_box_reg (mean): {total_loss_rpn_box_reg.item() / len(loader):.3f}')
 
 
+@torch.inference_mode()
 def visualise_prediction(model, device, img_name, dataset, show_ground_truth=True):
     model.eval()
     idx = dataset.index_of(img_name)
@@ -66,11 +67,11 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
     targets = {k: v.to(device) for k, v in targets.items()}
     prediction = model(img)[0]
     boxes = prediction['boxes']
-    labels = ['pred_(' + dataset.from_label(lab) + ')' for lab in prediction['labels'].tolist()]
-    colours = ['blue'] * len(prediction['boxes'])
+    labels = ['pred_(' + dataset.get_class_name(lab) + ')' for lab in prediction['labels'].tolist()]
+    colours = ['green'] * len(prediction['boxes'])
     if show_ground_truth:
         boxes = torch.cat((targets['boxes'], boxes), dim=0)
-        labels = ['true_(' + dataset.from_label(lab) + ')' for lab in targets['labels'].tolist()] + labels
+        labels = ['true_(' + dataset.get_class_name(lab) + ')' for lab in targets['labels'].tolist()] + labels
         colours = ['red'] * len(targets['boxes']) + colours
     image255 = Image.open(os.path.join(dataset.root, 'images', img_name)).convert('RGB')
     image255 = functional.pil_to_tensor(image255)
@@ -79,14 +80,26 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 
 
 @torch.inference_mode()
-def evaluate(model, loader, device):
+def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
     model.eval()
 
-    for images, targets in loader:
+    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
+
+    for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
         predictions = model(images)
         predictions = [{k: v.to(device) for k, v in t.items()} for t in predictions]
 
-        # TODO: Actually evaluate results
+        evaluator.update(targets, predictions)
+
+        if log_every and i % log_every == 0:
+            logging.info(f"Test [{i}/{len(loader)}]")
+
+    res = evaluator.summarise()
+    logging.info(f"Summary (Average Precision): mAP={res['mAP']:.2f}, "
+                 + ", ".join([f"{key}={val}" for key, val in res.items() if key != 'mAP']))

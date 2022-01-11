@@ -1,3 +1,5 @@
+import time
+
 import torch
 import os
 from PIL import Image
@@ -6,6 +8,7 @@ from xml.etree import ElementTree
 from torch import nn
 from torchvision.transforms import transforms, functional
 
+from detection import utils
 from detection.fathomnethelper.json_loader import Taxonomicon
 
 
@@ -55,7 +58,10 @@ class FathomNetDataset(torch.utils.data.Dataset):
         else:
             boxes = torch.as_tensor(boxes, dtype=torch.float32)
         labels = torch.as_tensor(labels, dtype=torch.int64)
-        targets = {'boxes': boxes, 'labels': labels, 'img_id': torch.tensor([idx])}
+
+        img_id_enc = utils.tensor_encode_id(os.path.splitext(self.imgs[idx])[0])
+
+        targets = {'boxes': boxes, 'labels': labels, 'img_id': img_id_enc}
 
         if self.transforms is not None:
             img, targets = self.transforms(img, targets)
@@ -68,7 +74,7 @@ class FathomNetDataset(torch.utils.data.Dataset):
     def index_of(self, img_id):
         return self.imgs.index(img_id)
 
-    def from_label(self, label: int):
+    def get_class_name(self, label: int):
         return [k for k, v in self.label_mapping.items() if v == label][0]
 
     def set_transforms(self, transforms):
@@ -167,6 +173,22 @@ def load_datasets(name, root, classes, train_ratio):
         train_size = int(len(dataset) * train_ratio)
         test_size = len(dataset) - train_size
         train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+        train_dataset = remove_images_without_annotations(train_dataset)
     else:
-        raise NotImplementedError
+        raise NotImplementedError('Currently supported datasets: FathomNet')
     return train_dataset, test_dataset
+
+
+def remove_images_without_annotations(subset: torch.utils.data.dataset.Subset):
+    valid_indices = []
+    dataset = subset.dataset
+    for i, idx in enumerate(subset.indices, start=1):
+        ann_path = os.path.join(dataset.root, 'annotations', dataset.anns[idx])
+        tree_root = ElementTree.parse(ann_path).getroot()
+        for box in tree_root.iter('object'):
+            name = box.find('name').text
+            if name in dataset.class_mapping:
+                valid_indices.append(idx)
+                break
+    new_subset = torch.utils.data.dataset.Subset(dataset, valid_indices)
+    return new_subset

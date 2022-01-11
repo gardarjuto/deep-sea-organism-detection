@@ -1,6 +1,6 @@
 import os
 import logging
-import datetime
+import sys
 import torch
 import torch.cuda
 import torch.distributed as dist
@@ -28,10 +28,10 @@ def initialise_logging(args):
     if not isinstance(level, int):
         raise ValueError(f"Invalid log level: {args.log_level}")
     if args.log_file:
-        logging.basicConfig(filename=args.log_file, filemode='w', level=level, format='%(asctime)s %(message)s',
+        logging.basicConfig(filename=args.log_file, filemode='w', level=level, format='[%(asctime)s] %(message)s',
                             datefmt='%I:%M:%S %p')
     else:
-        logging.basicConfig(level=level, format='%(asctime)s %(message)s', datefmt='%I:%M:%S %p')
+        logging.basicConfig(stream=sys.stdout, level=level, format='%(asctime)s %(message)s', datefmt='%I:%M:%S %p')
 
 
 def collate_fn(batch):
@@ -45,6 +45,24 @@ def is_master_process():
 
 
 def save_state(checkpoint, output_dir, epoch):
-    if is_master_process():
-        torch.save(checkpoint, os.path.join(output_dir, 'checkpoint.file'))
-        torch.save(checkpoint, os.path.join(output_dir, f'model_{epoch}.file'))
+    torch.save(checkpoint, os.path.join(output_dir, 'checkpoint.file'))
+    torch.save(checkpoint, os.path.join(output_dir, f'model_{epoch}.file'))
+
+
+def tensor_encode_id(img_id):
+    """
+    Encodes a FathomNet image id like '00a6db92-5277-4772-b019-5b89c6af57c3' as a tensor
+    of shape torch.Size([4]) of four integers in the range [0, 2^32-1].
+    """
+    hex_str = img_id.replace('-', '')
+    length = len(hex_str) // 4
+    img_id_enc = tuple(int(hex_str[i * length: (i + 1) * length], 16) for i in range(4))
+    return torch.tensor(img_id_enc)
+
+
+def tensor_decode_id(img_id_enc):
+    ints = img_id_enc.tolist()
+    img_id = ''.join([hex(part)[2:].zfill(8) for part in ints])
+    for ind in [8, 13, 18, 23]:
+        img_id = img_id[:ind] + '-' + img_id[ind:]
+    return img_id

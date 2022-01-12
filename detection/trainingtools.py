@@ -100,6 +100,6 @@ def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
 
-    res = evaluator.summarise()
-    logging.info(f"Summary (Average Precision): mAP={res['mAP']:.2f}, "
+    res = evaluator.summarise(method="101")
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.2f}, "
                  + ", ".join([f"{key}={val}" for key, val in res.items() if key != 'mAP']))

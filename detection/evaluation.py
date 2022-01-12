@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 from torchvision.ops import box_iou
-import time
 
 
 class FathomNetEvaluator:
@@ -57,26 +56,41 @@ class FathomNetEvaluator:
             # True positives + False negatives
             self.metrics_by_class[cls]['tot_GT'] += len(true_boxes)
 
-    def summarise(self):
+    def prec_rec_for_class(self, cls):
+        # Calculate cumulative metrics by descending confidence order
+        conf_order = np.argsort(self.metrics_by_class[cls]['conf'])[::-1]
+        cum_tp = np.cumsum(np.array(self.metrics_by_class[cls]['TP'])[conf_order])
+        cum_fp = np.cumsum(np.array(self.metrics_by_class[cls]['FP'])[conf_order])
+        if len(cum_tp) + len(cum_fp) == 0:
+            raise ZeroDivisionError("No predictions for class")
+        if self.metrics_by_class[cls]['tot_GT'] == 0:
+            raise ZeroDivisionError("No instances in test set")
+        precision = cum_tp / (cum_tp + cum_fp)
+        recall = cum_tp / self.metrics_by_class[cls]['tot_GT']
+        return precision, recall
+
+    def summarise(self, method="101"):
         res = {}
         for cls in self.metrics_by_class:
-            # Calculate cumulative metrics by descending confidence order
-            conf_order = np.argsort(self.metrics_by_class[cls]['conf'])[::-1]
-            cum_tp = np.cumsum(np.array(self.metrics_by_class[cls]['TP'])[conf_order])
-            cum_fp = np.cumsum(np.array(self.metrics_by_class[cls]['FP'])[conf_order])
-            if len(cum_tp) + len(cum_fp) == 0:
-                res[self.dataset.get_class_name(cls)] = "No predictions"
+            try:
+                precision, recall = self.prec_rec_for_class(cls)
+            except ZeroDivisionError as e:
+                res[self.dataset.get_class_name(cls)] = e
                 continue
-            if self.metrics_by_class[cls]['tot_GT'] == 0:
-                res[self.dataset.get_class_name(cls)] = "No instances in test set"
-                continue
-            precision = cum_tp / (cum_tp + cum_fp)
-            recall = cum_tp / self.metrics_by_class[cls]['tot_GT']
 
-            # Calculate interpolated AP
-            precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
-            delta_recall = np.abs(np.diff(recall[::-1], prepend=0.0)[::-1])
-            AP = np.sum(precision_ip * delta_recall)
+            if method == "101":
+                # Implements the MS COCO calculation of AP
+                # Calculate interpolated precision, then compute AP as the mean of 101 evenly spaced sample points
+                precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
+                sample_points = np.linspace(0., 1., 101)
+                AP = np.mean(np.append(precision, 0.0)[np.searchsorted(recall, sample_points)])
+            elif method == "all_points":
+                # Implements the PASCAL VOC 2010 challenge interpolation
+                # Calculate all points interpolated precision, then compute AP as AUC
+                precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
+                AP = np.sum(np.diff(recall, prepend=0.0) * precision_ip)
+            else:
+                raise NotImplementedError("Only supports methods '101' and 'all_points'")
             res[self.dataset.get_class_name(cls)] = AP
         res['mAP'] = np.nanmean(list(val for val in res.values() if not isinstance(val, str)))
         return res

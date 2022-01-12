@@ -66,6 +66,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
+    parser.add_argument("--evaluate-only", action="store_true", help="Only evaluate model")
 
     # Distributed training
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
@@ -136,6 +137,13 @@ def main(args):
         if args.amp:
             scaler.load_state_dict(checkpoint["scaler"])
 
+    if args.evaluate_only:
+        # Evaluate and then quit
+        if utils.is_master_process():
+            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
+                                   log_every=args.log_every)
+        return
+
     # Train the model
     logging.info("Beginning training:")
     for epoch in range(args.start_epoch, args.epochs):
@@ -152,7 +160,7 @@ def main(args):
         if args.output_dir and utils.is_master_process():
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
-                "optimizer": optimiser.state_dict(),
+                "optimiser": optimiser.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
                 "args": args,
                 "epoch": epoch,
@@ -168,7 +176,7 @@ def main(args):
 
         if args.distributed:
             # Wait while master process saves and evaluates
-            torch.distributed.barrier()
+            torch.distributed.barrier(device_ids=[args.gpu])
 
 
 if __name__ == '__main__':

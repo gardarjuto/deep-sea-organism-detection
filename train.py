@@ -1,8 +1,10 @@
 import argparse
 import json
 import os
+import random
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -78,6 +80,10 @@ def get_args_parser(add_help=True):
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
     parser.add_argument("--evaluate-only", action="store_true", help="Only evaluate model")
 
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Fix random generator seed. Setting this forces a deterministic run"
+    )
+
     # Distributed training
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
 
@@ -90,6 +96,19 @@ def main(args):
     utils.initialise_distributed(args)
     utils.initialise_logging(args)
     logging.info("Started")
+
+    if args.distributed:
+        logging.info(f"Distributed run with {args.world_size} processes")
+
+    if args.seed is not None:
+        logging.info(f"Seed set to {args.seed}")
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
     # Parse class definition file
     logging.info("Loading class definitions...")
@@ -160,8 +179,12 @@ def main(args):
 
     if args.evaluate_only:
         # Evaluate and then quit
-        trainingtools.evaluate(model, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
-                               log_every=args.log_every)
+        if utils.is_master_process():
+            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
+                                   log_every=args.log_every)
+        if args.distributed:
+            # Wait while master process saves and evaluates
+            torch.distributed.barrier(device_ids=[args.gpu])
         return
 
     # Train the model
@@ -178,6 +201,7 @@ def main(args):
 
         # Save checkpoint
         if args.output_dir and utils.is_master_process():
+            logging.info("Saving checkpoint...")
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
                 "optimiser": optimiser.state_dict(),

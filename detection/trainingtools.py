@@ -95,8 +95,7 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
     model.eval()
 
-    if utils.is_master_process():
-        evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
+    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
 
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]

@@ -1,3 +1,4 @@
+import logging
 import time
 
 import torch
@@ -180,6 +181,7 @@ def load_datasets(name, root, classes, train_ratio):
 
 
 def remove_images_without_annotations(subset: torch.utils.data.dataset.Subset):
+    logging.info("Removing images without annotations from training data")
     valid_indices = []
     dataset = subset.dataset
     for i, idx in enumerate(subset.indices, start=1):
@@ -191,4 +193,5 @@ def remove_images_without_annotations(subset: torch.utils.data.dataset.Subset):
                 valid_indices.append(idx)
                 break
     new_subset = torch.utils.data.dataset.Subset(dataset, valid_indices)
+    logging.info(f"Reduced training set size from {len(subset.indices)} to {len(valid_indices)}")
     return new_subset

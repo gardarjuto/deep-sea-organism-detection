@@ -43,7 +43,17 @@ def get_args_parser(add_help=True):
         dest="weight_decay",
     )
     parser.add_argument(
+        "--lr-scheduler", default="multisteplr", type=str, help="name of lr scheduler (default: multisteplr)"
+    )
+    parser.add_argument(
         "--lr-step-size", default=8, type=int, help="decrease lr every step-size epochs (multisteplr scheduler only)"
+    )
+    parser.add_argument(
+        "--lr-steps",
+        default=[16, 22],
+        nargs="+",
+        type=int,
+        help="decrease lr every step-size epochs (multisteplr scheduler only)",
     )
     parser.add_argument(
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
@@ -96,10 +106,10 @@ def main(args):
     logging.info("Creating data loaders...")
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-        # test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
-    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
 
@@ -114,6 +124,9 @@ def main(args):
     logging.info("Loading model...")
     model = models.load_model(args.model, num_classes=num_classes, pretrained=args.pretrained)
     model = model.to(device)
+    if args.distributed and args.sync_bn:
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
     model_without_ddp = model
     if args.distributed:
         model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
@@ -125,7 +138,15 @@ def main(args):
 
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
 
-    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimiser, step_size=args.lr_step_size, gamma=args.lr_gamma)
+    args.lr_scheduler = args.lr_scheduler.lower()
+    if args.lr_scheduler == "multisteplr":
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimiser, milestones=args.lr_steps, gamma=args.lr_gamma)
+    elif args.lr_scheduler == "cosineannealinglr":
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
+    else:
+        raise RuntimeError(
+            f"Invalid lr scheduler '{args.lr_scheduler}'. Only MultiStepLR and CosineAnnealingLR are supported."
+        )
 
     if args.checkpoint:
         logging.info("Resuming from checkpoint...")
@@ -139,9 +160,8 @@ def main(args):
 
     if args.evaluate_only:
         # Evaluate and then quit
-        if utils.is_master_process():
-            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
-                                   log_every=args.log_every)
+        trainingtools.evaluate(model, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
+                               log_every=args.log_every)
         return
 
     # Train the model

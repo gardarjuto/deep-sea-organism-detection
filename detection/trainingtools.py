@@ -18,6 +18,15 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
     total_loss_objectness = 0.0
     total_loss_rpn_box_reg = 0.0
 
+    lr_scheduler = None
+    if epoch == 0:
+        warmup_factor = 1.0 / 1000
+        warmup_iters = min(1000, len(loader) - 1)
+
+        lr_scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimiser, start_factor=warmup_factor, total_iters=warmup_iters
+        )
+
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -47,9 +56,12 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
             losses.backward()
             optimiser.step()
 
+        if lr_scheduler is not None:
+            lr_scheduler.step()
+
         if log_every and i % log_every == 0:
-            logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  " +
-                         ", ".join([f"{loss_type}: {loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
+            logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  LR={optimiser.param_groups[0]['lr']}  " +
+                         ", ".join([f"{loss_type}={loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
 
     logging.info(f'Summary:')
     logging.info(f'\tloss_classifier (mean): {total_loss_classifier.item() / len(loader):.3f}, '
@@ -83,7 +95,8 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
     model.eval()
 
-    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
+    if utils.is_master_process():
+        evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
 
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]

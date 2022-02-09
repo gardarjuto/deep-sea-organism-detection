@@ -68,7 +68,6 @@ def get_args_parser(add_help=True):
         "--data-augmentation", default="hflip", type=str, help="data augmentation policy (default: hflip)"
     )
     parser.add_argument("--sync-bn", dest="sync_bn", help="Use sync batch norm", action="store_true")
-    parser.add_argument("--test-only", dest="test_only", help="Only test the model", action="store_true")
     parser.add_argument(
         "--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo", action="store_true"
     )
@@ -125,10 +124,10 @@ def main(args):
     logging.info("Creating data loaders...")
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
+        # test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
-        test_sampler = torch.utils.data.SequentialSampler(test_dataset)
+    test_sampler = torch.utils.data.SequentialSampler(test_dataset)
 
     train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
 
@@ -180,8 +179,9 @@ def main(args):
     if args.evaluate_only:
         # Evaluate and then quit
         if utils.is_master_process():
-            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
-                                   log_every=args.log_every)
+            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, epoch=args.start_epoch - 1,
+                                   iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
+                                   plot_pc=True)
         if args.distributed:
             # Wait while master process saves and evaluates
             torch.distributed.barrier(device_ids=[args.gpu])
@@ -215,8 +215,9 @@ def main(args):
 
         # Evaluate on the test data
         if utils.is_master_process():
-            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, iou_thresh=args.iou_thresh,
-                                   log_every=args.log_every)
+            trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, epoch=epoch,
+                                   iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
+                                   plot_pc=True)
 
         if args.distributed:
             # Wait while master process saves and evaluates

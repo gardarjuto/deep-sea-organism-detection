@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+from matplotlib import pyplot as plt
 from torchvision.ops import box_iou
 
 
@@ -20,11 +21,11 @@ class FathomNetEvaluator:
         }
 
     def update(self, targets, predictions):
-        target_boxes_all = targets[0]['boxes']
-        target_labels_all = targets[0]['labels']
-        pred_boxes_all = predictions[0]['boxes']
-        pred_labels_all = predictions[0]['labels']
-        pred_scores_all = predictions[0]['scores']
+        target_boxes_all = targets['boxes']
+        target_labels_all = targets['labels']
+        pred_boxes_all = predictions['boxes']
+        pred_labels_all = predictions['labels']
+        pred_scores_all = predictions['scores']
 
         for cls in range(1, self.num_classes + 1):
             true_boxes = target_boxes_all[target_labels_all == cls]
@@ -83,7 +84,7 @@ class FathomNetEvaluator:
                 # Calculate interpolated precision, then compute AP as the mean of 101 evenly spaced sample points
                 precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
                 sample_points = np.linspace(0., 1., 101)
-                AP = np.mean(np.append(precision, 0.0)[np.searchsorted(recall, sample_points)])
+                AP = np.mean(np.append(precision_ip, 0.0)[np.searchsorted(recall, sample_points)])
             elif method == "all_points":
                 # Implements the PASCAL VOC 2010 challenge interpolation
                 # Calculate all points interpolated precision, then compute AP as AUC
@@ -95,3 +96,25 @@ class FathomNetEvaluator:
         res['mAP'] = np.nanmean(list(val for val in res.values() if not isinstance(val, str)))
         return res
 
+    def plot_precision_recall(self, interpolate=True):
+        """Returns a grid with one plot for each class"""
+        nrows = int(np.sqrt(len(self.metrics_by_class)))
+        ncols = int(np.ceil(len(self.metrics_by_class) / nrows))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(15, 15), sharex=True, sharey=True)
+
+        for ax, cls in zip(axes.ravel(), self.metrics_by_class):
+            precision, recall = self.prec_rec_for_class(cls)
+            ax.plot(recall, precision, '--', label='original', color='grey')
+            if interpolate:
+                precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
+                ax.step(recall, precision_ip, label='interpolated', color='black')
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.legend()
+            ax.grid()
+            ax.title.set_text(self.dataset.get_class_name(cls))
+        fig.add_subplot(111, frameon=False)
+        plt.tick_params(labelcolor='none', which='both', top=False, bottom=False, left=False, right=False)
+        plt.xlabel("Recall", fontsize=14)
+        plt.ylabel("Precision", fontsize=14)
+        return axes

@@ -1,5 +1,37 @@
+from skimage.transform import resize
+from skimage.feature import hog
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.transforms.functional import rgb_to_grayscale
+import numpy as np
+
+
+class HOG:
+    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys', gamma_corr=False, resize_to=(128, 128)):
+        self.orientations = orientations
+        self.pixels_per_cell = pixels_per_cell
+        self.cells_per_block = cells_per_block
+        self.block_norm = block_norm
+        self.gamma_corr = gamma_corr
+        self.resize_to = resize_to
+
+    def extract_all(self, dataset):
+        """Extracts features from all samples in dataset"""
+        descriptors = []
+        labels = []
+        for im, label in dataset:
+            fd = self.extract(im)
+            descriptors.append(fd)
+            labels.append(label)
+        return descriptors, labels
+
+    def extract(self, image):
+        if image.shape[2] > 1:
+            image = np.squeeze(rgb_to_grayscale(image))
+        im_resized = resize(image, self.resize_to, anti_aliasing=True)
+        fd = hog(im_resized, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
+                 transform_sqrt=self.gamma_corr)
+        return fd
 
 
 def load_model(name, num_classes, pretrained=False, progress=True):

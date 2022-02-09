@@ -1,8 +1,12 @@
 import math
 import os
 import sys
+
+import matplotlib.pyplot as plt
 import torch
 from PIL import Image
+from skimage.transform import pyramid_gaussian
+from sklearn.svm import LinearSVC
 from torchvision.transforms import transforms, functional
 from torchvision.utils import draw_bounding_boxes
 import logging
@@ -92,7 +96,7 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 
 
 @torch.inference_mode()
-def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
+def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=True):
     model.eval()
 
     evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
@@ -107,11 +111,66 @@ def evaluate(model, loader, device, iou_thresh=0.5, log_every=None):
         predictions = model(images)
         predictions = [{k: v.to(device) for k, v in t.items()} for t in predictions]
 
-        evaluator.update(targets, predictions)
+        evaluator.update(targets[0], predictions[0])
 
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
 
     res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.2f}, "
-                 + ", ".join([f"{key}={val}" for key, val in res.items() if key != 'mAP']))
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+                 + ", ".join([f"{key}={val:.3f}" for key, val in res.items() if key != 'mAP']))
+    if plot_pc:
+        axes = evaluator.plot_precision_recall(interpolate=True)
+        plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
+
+
+def train_svm(descriptors, labels, num_classes):
+    svm = LinearSVC()
+    svm.fit(descriptors, labels)
+    return svm
+
+
+def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50), step_size=(1, 1)):
+    detections = []
+
+    scale = 0
+    for im_scaled in pyramid_gaussian(image, downscale=downscale):
+        # If the width or height of the scaled image is less than
+        # the width or height of the window, then end the iterations.
+        if im_scaled.shape[0] < min_w[0] or im_scaled.shape[1] < min_w[1]:
+            break
+        for x, y, window in utils.sliding_window(im_scaled, min_w, step_size):
+            # Extract the features
+            fd = feature_extractor.extract(window)
+            # Make prediction
+            pred = svm.predict(fd)
+            detections.append((x, y,
+                               int(min_w[1] * (downscale ** scale)),
+                               int(min_w[0] * (downscale ** scale)),
+                               svm.decision_function(fd)))
+        # Move the the next scale
+        scale += 1
+    return detections
+
+
+def get_prediction(svm, feature_extractor, image):
+    fd = feature_extractor.extract(image)
+    # Make prediction
+    pred = svm.predict([fd])
+    return pred
+
+
+def evaluate_svm(svm, feature_extractor, dataset, iou_thresh=0.5, output_dir=None, plot_pc=True, downscale=1.25):
+    evaluator = evaluation.FathomNetEvaluator(dataset=dataset.dataset, device='cpu', iou_thresh=iou_thresh)
+
+    corrects = [0 for _ in range(len(dataset.dataset.classes))]
+    totals = [0 for _ in range(len(dataset.dataset.classes))]
+    for i, (im, label) in enumerate(dataset):
+        prediction = get_prediction(svm, feature_extractor, im)
+        totals[label-1] += 1
+        if prediction[0] == label:
+            corrects[label-1] += 1
+    for i, (c, t) in enumerate(zip(corrects, totals)):
+        name = [key for key, value in dataset.dataset.label_mapping.items() if value == i+1][0]
+        logging.info(f"{name}: {c}/{t}")
+

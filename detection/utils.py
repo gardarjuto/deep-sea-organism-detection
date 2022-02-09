@@ -4,6 +4,7 @@ import sys
 import torch
 import torch.cuda
 import torch.distributed as dist
+from skimage.util import view_as_windows
 
 
 def initialise_distributed(args):
@@ -66,3 +67,10 @@ def tensor_decode_id(img_id_enc):
     for ind in [8, 13, 18, 23]:
         img_id = img_id[:ind] + '-' + img_id[ind:]
     return img_id
+
+
+def sliding_window(image, min_window, step_size):
+    for j, row in enumerate(view_as_windows(image, min_window, step_size)):
+        for i, window in enumerate(row):
+            x, y = i * step_size[1], j * step_size[0]
+            yield x, y, window

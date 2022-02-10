@@ -15,33 +15,32 @@ def get_args_parser(add_help=True):
     parser.add_argument("--test-path", default="data/test", type=str, help="path to test dataset")
     parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
     parser.add_argument("--dataset", default="FathomNet", type=str, help="dataset name")
-    parser.add_argument(
-        "--eval-split", "--tr", default=0.2, type=float, help="proportion of training dataset to use for evalutation"
-    )
-    parser.add_argument(
-        "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
-    )
+    parser.add_argument("--val-split", "--tr", default=0.2, type=float,
+                        help="proportion of training dataset to use for validation")
+    parser.add_argument("-j", "--workers", default=4, type=int, metavar="N",
+                        help="number of data loading workers (default: 4)")
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
-    parser.add_argument(
-        "--data-augmentation", default="hflip", type=str, help="data augmentation policy (default: hflip)"
-    )
+    parser.add_argument("--data-augmentation", default="hflip", type=str,
+                        help="data augmentation policy (default: hflip)")
     parser.add_argument("--iou-thresh", default=0.5, type=float, help="IoU threshold for evaluation")
-    parser.add_argument("--log-file", "--lf", default=None, type=str, help="path to file for writing logs. If "
-                                                                           "omitted, writes to stdout")
+    parser.add_argument("--log-file", "--lf", default=None, type=str,
+                        help="path to file for writing logs. If omitted, writes to stdout")
     parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
     parser.add_argument("--evaluate-only", action="store_true", help="Only evaluate model")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Fix random generator seed. Setting this forces a deterministic run")
 
-    parser.add_argument(
-        "--seed", type=int, default=None, help="Fix random generator seed. Setting this forces a deterministic run"
-    )
-
-    # HOG arguments
+    # HOG parameters
     parser.add_argument("--hog-bins", default=9, type=int, help="Number or bins for orientation binning in HOG")
-    parser.add_argument("--ppc", default=(8,8), nargs="+", type=int, help="Pixels per cell in HOG")
-    parser.add_argument("--cpb", default=(3,3), nargs="+", type=int, help="Cells per block in HOG")
+    parser.add_argument("--ppc", default=(8, 8), nargs="+", type=int, help="Pixels per cell in HOG")
+    parser.add_argument("--cpb", default=(3, 3), nargs="+", type=int, help="Cells per block in HOG")
     parser.add_argument("--block-norm", default="L2-Hys", type=str, help="Block norm in HOG")
     parser.add_argument("--gamma-corr", default=True, type=bool, help="Use gamma correction in HOG")
     parser.add_argument("--hog-dim", default=(64, 64), nargs="+", type=int, help="Input dimensions for HOG extractor")
+
+    # Sliding window parameters
+    parser.add_argument("--downscale-factor", default=1.25, type=float,
+                        help="Downscale factor in each iteration of gaussian pyramid")
     return parser
 
 
@@ -65,13 +64,13 @@ def main(args):
     logging.info("Loading class definitions...")
     with open(args.class_file, "r") as f:
         classes = json.load(f)
-    num_classes = len(classes) + 1
+    num_classes = len(classes)
     logging.info(f"Training with {num_classes} classes: " + ", ".join(['background'] + list(classes.keys())))
 
     # Load data
     logging.info("Loading dataset...")
-    train_dataset, test_dataset = datasets.load_datasets(name=args.dataset, root=args.train_path, classes=classes,
-                                                         train_ratio=args.eval_split)
+    train_dataset, val_dataset = datasets.load_train_val(name=args.dataset, train_path=args.train_path, classes=classes,
+                                                         val_split=args.val_split)
 
     # Extract features
     logging.info("Extracting features...")
@@ -88,8 +87,9 @@ def main(args):
 
     # Evaluate
     logging.info("Evaluating SVM on test dataset")
-    trainingtools.evaluate_svm(svm, feature_extractor=feature_extractor, dataset=test_dataset,
-                               iou_thresh=args.iou_thresh, output_dir=args.output_dir, plot_pc=True, downscale=True)
+    trainingtools.evaluate_svm(svm, feature_extractor=feature_extractor, dataset=val_dataset,
+                                    iou_thresh=args.iou_thresh, output_dir=args.output_dir, plot_pc=True,
+                                    downscale=args.downscale_factor)
 
 
 if __name__ == '__main__':

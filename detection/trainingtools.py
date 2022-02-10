@@ -3,15 +3,17 @@ import os
 import sys
 
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 from PIL import Image
 from skimage.transform import pyramid_gaussian
 from sklearn.svm import LinearSVC
+from sklearn.metrics import confusion_matrix
 from torchvision.transforms import transforms, functional
 from torchvision.utils import draw_bounding_boxes
 import logging
 
-from detection import utils, evaluation
+from detection import utils, evaluation, datasets
 
 
 def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every=None, scaler=None):
@@ -125,29 +127,30 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
 
 
 def train_svm(descriptors, labels, num_classes):
-    svm = LinearSVC()
+    if num_classes != len(set(labels)):
+        raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
+    svm = LinearSVC(max_iter=10000)
     svm.fit(descriptors, labels)
     return svm
 
 
-def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50), step_size=(1, 1)):
-    detections = []
+def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3)):
+    detections = {cl: [] for cl in svm.classes_}
+    confidence_scores = {cl: [] for cl in svm.classes_}
 
+    image = np.transpose(image.numpy(), (1, 2, 0))
     scale = 0
     for im_scaled in pyramid_gaussian(image, downscale=downscale):
+        print(scale)
         # If the width or height of the scaled image is less than
         # the width or height of the window, then end the iterations.
         if im_scaled.shape[0] < min_w[0] or im_scaled.shape[1] < min_w[1]:
             break
         for x, y, window in utils.sliding_window(im_scaled, min_w, step_size):
-            # Extract the features
-            fd = feature_extractor.extract(window)
-            # Make prediction
-            pred = svm.predict(fd)
-            detections.append((x, y,
-                               int(min_w[1] * (downscale ** scale)),
-                               int(min_w[0] * (downscale ** scale)),
-                               svm.decision_function(fd)))
+            pred, conf = get_prediction(svm, feature_extractor, window)
+            if conf > 0:
+                detections[pred[0]].append(
+                    [conf, x, y, int(min_w[1] * (downscale ** scale)), int(min_w[0] * (downscale ** scale))])
         # Move the the next scale
         scale += 1
     return detections
@@ -155,22 +158,38 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50)
 
 def get_prediction(svm, feature_extractor, image):
     fd = feature_extractor.extract(image)
-    # Make prediction
-    pred = svm.predict([fd])
-    return pred
+    pred = svm.predict(fd.reshape(1, -1))
+    conf = svm.decision_function(fd.reshape(1, -1)).max()
+    return pred, conf
 
 
-def evaluate_svm(svm, feature_extractor, dataset, iou_thresh=0.5, output_dir=None, plot_pc=True, downscale=1.25):
-    evaluator = evaluation.FathomNetEvaluator(dataset=dataset.dataset, device='cpu', iou_thresh=iou_thresh)
+def evaluate_svm(svm, feature_extractor, dataset, iou_thresh=0.5, log_every=False, output_dir=None, plot_pc=True, downscale=1.25):
+    if isinstance(dataset, datasets.FathomNetCroppedDataset):
+        fds, labels = feature_extractor.extract_all(dataset)
+        preds = svm.predict(fds)
+        cm = confusion_matrix(labels, preds, labels=[dataset.label_mapping[cl] for cl in dataset.classes])
+        utils.plot_confusion_matrix(cm / cm.sum(axis=0, keepdims=True), os.path.join(output_dir, 'confusion_matrix_hogsvm.png'),
+                                    labels=dataset.classes, show_values=True)
+        return
 
-    corrects = [0 for _ in range(len(dataset.dataset.classes))]
-    totals = [0 for _ in range(len(dataset.dataset.classes))]
-    for i, (im, label) in enumerate(dataset):
-        prediction = get_prediction(svm, feature_extractor, im)
-        totals[label-1] += 1
-        if prediction[0] == label:
-            corrects[label-1] += 1
-    for i, (c, t) in enumerate(zip(corrects, totals)):
-        name = [key for key, value in dataset.dataset.label_mapping.items() if value == i+1][0]
-        logging.info(f"{name}: {c}/{t}")
+    evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
+    print(svm.classes_)
+    for i, (im, targets) in enumerate(dataset):
+        detections = get_detections(svm, feature_extractor, im, downscale)
+        for label, decs in detections:
+            print([key for key, value in dataset.label_mapping.items() if value == label][0])
+
+        predictions = utils.non_maxima_suppression(detections)
+
+        evaluator.update(targets, predictions)
+
+        if log_every and i % log_every == 0:
+            logging.info(f"Test [{i}/{len(dataset)}]")
+
+    res = evaluator.summarise(method="101")
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+                 + ", ".join([f"{key}={val:.3f}" for key, val in res.items() if key != 'mAP']))
+    if plot_pc:
+        axes = evaluator.plot_precision_recall(interpolate=True)
+        plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
 

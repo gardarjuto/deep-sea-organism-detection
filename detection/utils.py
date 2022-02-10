@@ -1,9 +1,13 @@
 import os
 import logging
 import sys
+
+import numpy as np
 import torch
 import torch.cuda
 import torch.distributed as dist
+from matplotlib import pyplot as plt
+from matplotlib.colors import SymLogNorm
 from skimage.util import view_as_windows
 
 
@@ -69,8 +73,67 @@ def tensor_decode_id(img_id_enc):
     return img_id
 
 
-def sliding_window(image, min_window, step_size):
-    for j, row in enumerate(view_as_windows(image, min_window, step_size)):
-        for i, window in enumerate(row):
+def sliding_window(image, win_size, step_size):
+    for j, row in enumerate(view_as_windows(image, win_size, step_size)):
+        for i, col in enumerate(row):
             x, y = i * step_size[1], j * step_size[0]
-            yield x, y, window
+            for window in col:
+                yield x, y, window
+
+
+def iou(box1, box2):
+    x0 = max(box1[0], box2[0])
+    x1 = min(box1[2], box2[2])
+    y0 = max(box1[1], box2[1])
+    y1 = min(box1[3], box2[3])
+
+    intersection = (x1 - x0) * (y1 - y0)
+
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    iou = intersection / (area1 + area2 - intersection)
+    return iou
+
+
+def non_maxima_suppression(boxes, confidence_scores, threshold=0.5):
+    filtered_boxes = []
+    while boxes:
+        i = confidence_scores.argmax()
+        filtered_boxes.append(boxes[i])
+        b = boxes[i]
+        del boxes[i]
+        del confidence_scores[i]
+        marked = set([])
+        for i in range(len(boxes)):
+            if iou(boxes[i], b) > threshold:
+                marked.add(i)
+        boxes = [b for b in boxes if b not in marked]
+    return filtered_boxes
+
+
+def plot_confusion_matrix(conf_mat, filename, labels=None, log_scale=False, show_values=False, cmap='viridis'):
+    """
+    Plots a confusion matrix with or without labels.
+    """
+    fig, ax = plt.subplots(figsize=(6, 6))
+    im = ax.imshow(conf_mat, cmap=cmap, norm=SymLogNorm(10) if log_scale else None, extent=[0, 1, 0, 1], origin='lower',
+                   interpolation="nearest")
+    fig.colorbar(im, ax=ax)
+    if labels:
+        ax.set_xticks(np.linspace(0.5 / len(labels), 1 - 0.5 / len(labels), len(labels)))
+        ax.set_xticklabels(labels, rotation='vertical', fontsize=8)
+        ax.set_yticks(np.linspace(0.5 / len(labels), 1 - 0.5 / len(labels), len(labels)))
+        ax.set_yticklabels(labels, fontsize=8)
+    else:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    if show_values:
+        for (j, i), label in np.ndenumerate(conf_mat):
+            ax.text((i + 0.5) / len(conf_mat), (j + 0.5) / len(conf_mat[0]), f"{label:.02f}", ha='center', va='center',
+                    fontsize=8)
+
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('Actual')
+    plt.savefig(filename, facecolor='w', bbox_inches='tight', dpi=200)

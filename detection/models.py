@@ -2,12 +2,10 @@ from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
-from torchvision.transforms.functional import rgb_to_grayscale
-import numpy as np
 
 
 class HOG:
-    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys', gamma_corr=False, resize_to=(128, 128)):
+    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys', gamma_corr=False, resize_to=(64, 64)):
         self.orientations = orientations
         self.pixels_per_cell = pixels_per_cell
         self.cells_per_block = cells_per_block
@@ -26,8 +24,6 @@ class HOG:
         return descriptors, labels
 
     def extract(self, image):
-        if image.shape[2] > 1:
-            image = np.squeeze(rgb_to_grayscale(image))
         im_resized = resize(image, self.resize_to, anti_aliasing=True)
         fd = hog(im_resized, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
                  transform_sqrt=self.gamma_corr)

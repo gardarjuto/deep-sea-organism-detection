@@ -277,4 +277,7 @@ def mine_hard_negatives(
             cropped_img = F.crop(img[0], y0, x0, y1 - y0, x1 - x0)
             fd = feature_extractor.extract(cropped_img)
             hard_negatives.append(fd)
+
+        if i > 100:
+            break
     return hard_negatives

@@ -129,10 +129,10 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
 
 
-def train_svm(descriptors, labels, num_classes, max_iter=1000):
+def train_svm(descriptors, labels, num_classes, loss='hinge', dual=False, max_iter=1000):
     if num_classes != len(set(labels)):
         raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
-    clf = make_pipeline(StandardScaler(), LinearSVC(max_iter=max_iter))
+    clf = make_pipeline(StandardScaler(), LinearSVC(loss=loss, dual=dual, max_iter=max_iter))
     clf.fit(descriptors, labels)
     return clf
 

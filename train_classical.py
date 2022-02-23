@@ -55,6 +55,10 @@ def get_args_parser(add_help=True):
     parser.add_argument("--evaluate-only", action="store_true", help="only evaluate model")
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
     parser.add_argument("--plot-pc", action="store_true", help="plot precision recall curves")
+
+    # SVM parameters
+    parser.add_argument("--loss", default="hinge", type=str, help="loss type for SVM")
+    parser.add_argument("--max-iter", default=1000, type=int, help="maximum iterations in training SVM")
     return parser
 
 
@@ -101,7 +105,8 @@ def main(args):
 
     # Train SVM
     logging.info("Training classifier on feature descriptors")
-    clf = trainingtools.train_svm(descriptors, labels, num_classes)
+    use_dual = (len(descriptors[0]) > len(descriptors))
+    clf = trainingtools.train_svm(descriptors, labels, num_classes, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
 
 
     # Evaluate
@@ -129,7 +134,7 @@ def main(args):
 
         # Train SVM
         logging.info("Training classifier on feature descriptors")
-        clf = trainingtools.train_svm(descriptors, labels, num_classes)
+        clf = trainingtools.train_svm(descriptors, labels, num_classes, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
 
         # Evaluate
         logging.info("Evaluating classifier on test dataset")

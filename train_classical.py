@@ -101,7 +101,7 @@ def main(args):
 
     # Train SVM
     logging.info("Training classifier on feature descriptors")
-    clf = trainingtools.train_svm(descriptors, labels, num_classes-1)
+    clf = trainingtools.train_svm(descriptors, labels, num_classes)
 
 
     # Evaluate

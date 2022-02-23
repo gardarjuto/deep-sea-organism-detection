@@ -1,6 +1,7 @@
 import os
 import logging
 import sys
+import random
 
 import numpy as np
 import torch
@@ -81,35 +82,31 @@ def sliding_window(image, win_size, step_size):
                 yield x, y, window
 
 
-def iou(box1, box2):
-    x0 = max(box1[0], box2[0])
-    x1 = min(box1[2], box2[2])
-    y0 = max(box1[1], box2[1])
-    y1 = min(box1[3], box2[3])
+def iou_otm(box, boxes):
+    x0y0 = np.maximum(boxes[:, :2], box[:2])
+    x1y1 = np.minimum(boxes[:, 2:], box[2:])
 
-    intersection = (x1 - x0) * (y1 - y0)
+    intersection = (x1y1[:, 0] - x0y0[:, 0]) * (x1y1[:, 1] - x0y0[:, 1])
+    intersection[(x0y0[:, 0] > x1y1[:, 0]) | (x0y0[:, 1] > x1y1[:, 1])] = 0
 
-    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
 
-    iou = intersection / (area1 + area2 - intersection)
-    return iou
+    ious = intersection / (area + areas - intersection)
+    return ious
 
 
 def non_maxima_suppression(boxes, confidence_scores, threshold=0.5):
     filtered_boxes = []
-    while boxes:
+    filtered_confidence = []
+    while boxes.size > 0:
         i = confidence_scores.argmax()
         filtered_boxes.append(boxes[i])
-        b = boxes[i]
-        del boxes[i]
-        del confidence_scores[i]
-        marked = set([])
-        for i in range(len(boxes)):
-            if iou(boxes[i], b) > threshold:
-                marked.add(i)
-        boxes = [b for b in boxes if b not in marked]
-    return filtered_boxes
+        filtered_confidence.append(confidence_scores[i])
+        ious = iou_otm(boxes[i], boxes)
+        boxes = boxes[ious <= threshold]
+        confidence_scores = confidence_scores[ious <= threshold]
+    return filtered_boxes, filtered_confidence
 
 
 def plot_confusion_matrix(conf_mat, filename, labels=None, log_scale=False, show_values=False, cmap='viridis'):
@@ -137,3 +134,15 @@ def plot_confusion_matrix(conf_mat, filename, labels=None, log_scale=False, show
     ax.set_xlabel('Predicted')
     ax.set_ylabel('Actual')
     plt.savefig(filename, facecolor='w', bbox_inches='tight', dpi=200)
+
+
+def make_deterministic(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+

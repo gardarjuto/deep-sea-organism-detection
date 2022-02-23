@@ -6,10 +6,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
+from matplotlib import patches
 from skimage.transform import pyramid_gaussian
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 from sklearn.metrics import confusion_matrix
-from torchvision.transforms import transforms, functional
+from torchvision.transforms import transforms as T, functional as F
 from torchvision.utils import draw_bounding_boxes
 import logging
 
@@ -92,9 +95,9 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
         labels = ['true_(' + dataset.get_class_name(lab) + ')' for lab in targets['labels'].tolist()] + labels
         colours = ['red'] * len(targets['boxes']) + colours
     image255 = Image.open(os.path.join(dataset.root, 'images', img_name)).convert('RGB')
-    image255 = functional.pil_to_tensor(image255)
+    image255 = F.pil_to_tensor(image255)
     res = draw_bounding_boxes(image255, boxes, labels, colours, width=3)
-    return functional.to_pil_image(res)
+    return F.to_pil_image(res)
 
 
 @torch.inference_mode()
@@ -126,70 +129,152 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
 
 
-def train_svm(descriptors, labels, num_classes):
+def train_svm(descriptors, labels, num_classes, max_iter=1000):
     if num_classes != len(set(labels)):
         raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
-    svm = LinearSVC(max_iter=10000)
-    svm.fit(descriptors, labels)
-    return svm
+    clf = make_pipeline(StandardScaler(), LinearSVC(max_iter=max_iter))
+    clf.fit(descriptors, labels)
+    return clf
 
 
-def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3)):
+def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3), visualise=False):
     detections = {cl: [] for cl in svm.classes_}
-    confidence_scores = {cl: [] for cl in svm.classes_}
+    confidence = {cl: [] for cl in svm.classes_}
 
     image = np.transpose(image.numpy(), (1, 2, 0))
+
     scale = 0
-    for im_scaled in pyramid_gaussian(image, downscale=downscale):
-        print(scale)
+    for im_scaled in pyramid_gaussian(image, downscale=downscale, multichannel=True):
+        curr_detections = {cl: [] for cl in svm.classes_}
+        curr_confidence = {cl: [] for cl in svm.classes_}
+        scale_factor = downscale ** scale
+
         # If the width or height of the scaled image is less than
         # the width or height of the window, then end the iterations.
         if im_scaled.shape[0] < min_w[0] or im_scaled.shape[1] < min_w[1]:
             break
         for x, y, window in utils.sliding_window(im_scaled, min_w, step_size):
-            pred, conf = get_prediction(svm, feature_extractor, window)
+            pred, conf = get_classification(svm, feature_extractor, window)
             if conf > 0:
                 detections[pred[0]].append(
-                    [conf, x, y, int(min_w[1] * (downscale ** scale)), int(min_w[0] * (downscale ** scale))])
+                    [int(x * scale_factor), int(y * scale_factor),
+                     int((x + min_w[0]) * scale_factor), int((y + min_w[1]) * scale_factor)])
+                confidence[pred[0]].append(conf)
+
+                curr_detections[pred[0]].append(
+                    [x, y, x + min_w[0], y + min_w[1]])
+                curr_confidence[pred[0]].append(conf)
         # Move the the next scale
         scale += 1
-    return detections
+
+        if visualise:
+            fig, ax = plt.subplots()
+            plt.imshow(im_scaled)
+
+            for cl in detections:
+                for i, ((x0, y0, x1, y1), conf) in enumerate(zip(detections[cl], confidence[cl])):
+                    # add bounding boxes to the image
+                    box = patches.Rectangle(
+                        (x0, y0), x1-x0, y1-y0, edgecolor="red", facecolor="none"
+                    )
+
+                    ax.add_patch(box)
+
+                    rx, ry = box.get_xy()
+                    cx = rx + box.get_width() / 2.0
+                    cy = ry + box.get_height() / 8.0
+                    l = ax.annotate(
+                        f"{cl}, {conf:.1f}",
+                        (cx, cy),
+                        fontsize=8,
+                        fontweight="bold",
+                        color="white",
+                        ha='center',
+                        va='center'
+                    )
+                    l.set_bbox(
+                        dict(facecolor='red', alpha=0.5, edgecolor='red')
+                    )
+
+            plt.axis('off')
+            plt.show()
+
+    return detections, confidence
 
 
-def get_prediction(svm, feature_extractor, image):
+def get_classification(svm, feature_extractor, image):
     fd = feature_extractor.extract(image)
     pred = svm.predict(fd.reshape(1, -1))
     conf = svm.decision_function(fd.reshape(1, -1)).max()
     return pred, conf
 
 
-def evaluate_svm(svm, feature_extractor, dataset, iou_thresh=0.5, log_every=False, output_dir=None, plot_pc=True, downscale=1.25):
-    if isinstance(dataset, datasets.FathomNetCroppedDataset):
-        fds, labels = feature_extractor.extract_all(dataset)
-        preds = svm.predict(fds)
-        cm = confusion_matrix(labels, preds, labels=[dataset.label_mapping[cl] for cl in dataset.classes])
-        utils.plot_confusion_matrix(cm / cm.sum(axis=0, keepdims=True), os.path.join(output_dir, 'confusion_matrix_hogsvm.png'),
-                                    labels=dataset.classes, show_values=True)
-        return
+def evaluate_classifier(
+        clf, feature_extractor, loader, iou_thresh=0.5, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
+        log_every=None, output_dir=None, plot_pc=True, visualise=False):
+    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
+    logging.info(f"SVM has classes {clf.classes_}")
+    for i, (images, targets) in enumerate(loader):
+        detections, conf_scores = get_detections(clf, feature_extractor, images[0], downscale=downscale, min_w=min_w,
+                                                 step_size=step_size, visualise=visualise)
+        boxes = []
+        labels = []
+        scores = []
+        for cls in detections:
+            if not detections[cls]:
+                continue
+            filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
+                                                                               np.array(conf_scores[cls]))
+            boxes.extend(filtered_boxes)
+            labels.extend([cls for _ in range(len(filtered_boxes))])
+            scores.extend(filtered_confidence)
+        predictions = {'boxes': torch.tensor(np.array(boxes)), 'labels': torch.tensor(labels),
+                       'scores': torch.tensor(scores)}
 
-    evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
-    print(svm.classes_)
-    for i, (im, targets) in enumerate(dataset):
-        detections = get_detections(svm, feature_extractor, im, downscale)
-        for label, decs in detections:
-            print([key for key, value in dataset.label_mapping.items() if value == label][0])
-
-        predictions = utils.non_maxima_suppression(detections)
-
-        evaluator.update(targets, predictions)
+        evaluator.update(targets[0], predictions)
 
         if log_every and i % log_every == 0:
-            logging.info(f"Test [{i}/{len(dataset)}]")
+            logging.info(f"Test [{i}/{len(loader)}]")
 
     res = evaluator.summarise(method="101")
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
-                 + ", ".join([f"{key}={val:.3f}" for key, val in res.items() if key != 'mAP']))
+                 + ", ".join([f"{key}={val:.3f}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
 
+
+def mine_hard_negatives(
+        svm, feature_extractor, loader, iou_thresh=0.5, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
+        max_per_img=100):
+    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
+    hard_negatives = []
+
+    for i, (img, targets) in enumerate(loader):
+        print(f"Mining from image {i}/{len(loader)}")
+        detections, conf_scores = get_detections(svm, feature_extractor, img[0], downscale=downscale, min_w=min_w,
+                                                 step_size=step_size)
+        boxes = []
+        labels = []
+        scores = []
+        for cls in detections:
+            if not detections[cls]:
+                continue
+            filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
+                                                                               np.array(conf_scores[cls]))
+            boxes.extend(filtered_boxes)
+            labels.extend([cls for _ in range(len(filtered_boxes))])
+            scores.extend(filtered_confidence)
+        predictions = {'boxes': torch.tensor(np.array(boxes)), 'labels': torch.tensor(labels),
+                       'scores': torch.tensor(scores)}
+        hn, hn_scores = evaluator.get_hard_negatives(targets[0], predictions)
+        n = min(max_per_img, len(hn_scores))
+        top_n_idx = np.argpartition(hn_scores, -n)[-n:]
+
+        for box in hn[top_n_idx]:
+            x0, y0, x1, y1 = box.int()
+            cropped_img = F.crop(img[0], y0, x0, y1 - y0, x1 - x0)
+            fd = feature_extractor.extract(cropped_img)
+            hard_negatives.append(fd)
+    return hard_negatives

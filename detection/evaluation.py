@@ -93,7 +93,7 @@ class FathomNetEvaluator:
             else:
                 raise NotImplementedError("Only supports methods '101' and 'all_points'")
             res[self.dataset.get_class_name(cls)] = AP
-        res['mAP'] = np.nanmean(list(val for val in res.values() if not isinstance(val, str)))
+        res['mAP'] = np.nanmean(list(val for val in res.values() if not isinstance(val, ZeroDivisionError)))
         return res
 
     def plot_precision_recall(self, interpolate=True):
@@ -103,7 +103,11 @@ class FathomNetEvaluator:
         fig, axes = plt.subplots(nrows, ncols, figsize=(15, 15), sharex=True, sharey=True)
 
         for ax, cls in zip(axes.ravel(), self.metrics_by_class):
-            precision, recall = self.prec_rec_for_class(cls)
+            try:
+                precision, recall = self.prec_rec_for_class(cls)
+            except ZeroDivisionError as e:
+                ax.set_title(e)
+                continue
             ax.plot(recall, precision, '--', label='original', color='grey')
             if interpolate:
                 precision_ip = np.maximum.accumulate(precision[::-1])[::-1]
@@ -118,3 +122,19 @@ class FathomNetEvaluator:
         plt.xlabel("Recall", fontsize=14)
         plt.ylabel("Precision", fontsize=14)
         return axes
+
+    def get_hard_negatives(self, targets, predictions):
+        target_boxes = targets['boxes']
+        pred_boxes = predictions['boxes']
+        pred_labels = predictions['labels']
+        pred_scores = predictions['scores']
+
+        if target_boxes.numel() == 0:
+            return pred_boxes[pred_labels > 0], pred_scores[pred_labels > 0]
+        elif pred_boxes.numel() == 0:
+            return torch.empty(0), torch.empty(0)
+
+        ious = box_iou(target_boxes, pred_boxes)
+        negative_idx = (ious.max(dim=0).values < self.iou_thresh) & (pred_labels > 0)
+
+        return pred_boxes[negative_idx], pred_scores[negative_idx]

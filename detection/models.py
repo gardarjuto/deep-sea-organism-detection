@@ -1,7 +1,12 @@
+import numpy as np
+from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+import torchvision.transforms.functional as F
+
+from detection import datasets, utils
 
 
 class HOG:
@@ -13,14 +18,25 @@ class HOG:
         self.gamma_corr = gamma_corr
         self.resize_to = resize_to
 
-    def extract_all(self, dataset):
-        """Extracts features from all samples in dataset"""
+    def extract_all(self, loader):
+        """Extracts features from all samples from loader"""
         descriptors = []
         labels = []
-        for im, label in dataset:
-            fd = self.extract(im)
-            descriptors.append(fd)
-            labels.append(label)
+        if isinstance(loader.dataset, datasets.FathomNetDataset):
+            for img, targets in loader:
+                img, targets = img[0], targets[0]
+                for box, label in zip(targets['boxes'], targets['labels']):
+                    x0, y0, x1, y1 = box.int()
+                    cropped = F.crop(img, y0, x0, y1-y0, x1-x0)
+                    fd = self.extract(cropped)
+                    descriptors.append(fd)
+                    labels.append(label.item())
+        elif isinstance(loader.dataset, datasets.FathomNetCroppedDataset):
+            for img, label in loader:
+                img, label = img[0], label[0]
+                fd = self.extract(img)
+                descriptors.append(fd)
+                labels.append(label)
         return descriptors, labels
 
     def extract(self, image):

@@ -100,14 +100,8 @@ def main(args):
         logging.info(f"Distributed run with {args.world_size} processes")
 
     if args.seed is not None:
+        utils.make_deterministic(args.seed)
         logging.info(f"Seed set to {args.seed}")
-        torch.manual_seed(args.seed)
-        torch.cuda.manual_seed(args.seed)
-        torch.cuda.manual_seed_all(args.seed)
-        random.seed(args.seed)
-        np.random.seed(args.seed)
-        torch.backends.cudnn.benchmark = False
-        torch.backends.cudnn.deterministic = True
 
     # Parse class definition file
     logging.info("Loading class definitions...")

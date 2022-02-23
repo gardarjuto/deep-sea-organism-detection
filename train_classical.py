@@ -85,7 +85,7 @@ def main(args):
                                                          val_split=args.val_split)
 
     # Create dataloader
-    train_loader = DataLoader(train_dataset, batch_size=1, num_workers=args.workers, collate_fn=utils.collate_fn)
+    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=args.workers, collate_fn=utils.collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=1, num_workers=args.workers, collate_fn=utils.collate_fn)
 
     # Create feature extractor

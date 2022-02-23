@@ -42,7 +42,7 @@ class HOG:
     def extract(self, image):
         im_resized = resize(image, self.resize_to, anti_aliasing=True)
         fd = hog(im_resized, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
-                 transform_sqrt=self.gamma_corr)
+                 transform_sqrt=self.gamma_corr, multichannel=True)
         return fd
 
 

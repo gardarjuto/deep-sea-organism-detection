@@ -1,11 +1,14 @@
 import argparse
 import cProfile
 import json
+import os
 import random
 import numpy as np
 import torch
 import re
+import cv2
 from torch.utils.data import DataLoader
+import pickle
 
 from detection import models, utils, datasets, evaluation
 from detection import trainingtools
@@ -57,8 +60,16 @@ def get_args_parser(add_help=True):
     parser.add_argument("--plot-pc", action="store_true", help="plot precision recall curves")
 
     # SVM parameters
+    parser.add_argument("--C", default=1.0, type=float, help="C parameter for SVM")
     parser.add_argument("--loss", default="hinge", type=str, help="loss type for SVM")
     parser.add_argument("--max-iter", default=1000, type=int, help="maximum iterations in training SVM")
+
+    # Hard negative mining parameters
+    parser.add_argument("--neg-per-img", default=100, type=int, help="how many hard negatives to mine from each image")
+
+    # OpenCV parameters
+    parser.add_argument("--threads", default=1, type=int,
+                        help="number of threads to use for OpenCV operations such as selective search")
     return parser
 
 
@@ -98,17 +109,21 @@ def main(args):
     descriptors, labels = feature_extractor.extract_all(train_loader)
 
     # Add one background GT for SVM
-    descriptors.append(descriptors[0])
-    labels.append(0)
     logging.info(f"N={len(descriptors)},D={len(descriptors[0])}")
     logging.info(f"Min={min([descriptor.min() for descriptor in descriptors])}, Max={max([descriptor.max() for descriptor in descriptors])}")
+    descriptors.append(descriptors[0])
+    labels.append(0)
 
     # Train SVM
     logging.info("Training classifier on feature descriptors")
     use_dual = (len(descriptors[0]) > len(descriptors))
-    clf = trainingtools.train_svm(descriptors, labels, num_classes, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
+    logging.info("Using dual" if use_dual else "Not using dual")
+    clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
 
+    cv2.setUseOptimized(True)
+    #cv2.setNumThreads(args.threads)
 
+    """
     # Evaluate
     logging.info("Evaluating classifier on test dataset")
     trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, loader=val_loader,
@@ -116,7 +131,7 @@ def main(args):
                                       min_w=(*args.min_window, 3), step_size=(*args.step_size, 3),
                                       log_every=args.log_every, output_dir=args.output_dir, plot_pc=args.plot_pc,
                                       visualise=False)
-
+    """
     # Apply training procedure
     for epoch in range(args.epochs):
         # Apply hard negative mining
@@ -125,16 +140,22 @@ def main(args):
                                                              iou_thresh=args.iou_thresh,
                                                              downscale=args.downscale_factor,
                                                              min_w=(*args.min_window, 3),
-                                                             step_size=(*args.step_size, 3))
+                                                             step_size=(*args.step_size, 3),
+                                                             log_every=args.log_every)
 
         # Add hard negatives to training samples
         descriptors.extend(negative_samples)
         labels.extend([0] * len(negative_samples))
         logging.info(f"Added {len(negative_samples)} negative samples to the previous {len(descriptors) - len(negative_samples)} total")
 
+        # Save descriptors
+        with open(os.path.join(args.output_dir, f"saved_descriptors_epoch_{epoch}.pickle"), "wb") as f:
+            pickle.dump({'descriptors': descriptors, 'labels': labels}, f)
+
         # Train SVM
         logging.info("Training classifier on feature descriptors")
-        clf = trainingtools.train_svm(descriptors, labels, num_classes, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
+        use_dual = (len(descriptors[0]) > len(descriptors)) or (args.loss == 'hinge')
+        clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
 
         # Evaluate
         logging.info("Evaluating classifier on test dataset")

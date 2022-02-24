@@ -37,7 +37,7 @@ def initialise_logging(args):
         logging.basicConfig(filename=args.log_file, filemode='w', level=level, format='[%(asctime)s] %(message)s',
                             datefmt='%I:%M:%S %p')
     else:
-        logging.basicConfig(stream=sys.stdout, level=level, format='%(asctime)s %(message)s', datefmt='%I:%M:%S %p')
+        logging.basicConfig(stream=sys.stdout, level=level, format='[%(asctime)s] %(message)s', datefmt='%I:%M:%S %p')
 
 
 def collate_fn(batch):

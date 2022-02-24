@@ -102,7 +102,7 @@ class FathomNetEvaluator:
         ncols = int(np.ceil(len(self.metrics_by_class) / nrows))
         fig, axes = plt.subplots(nrows, ncols, figsize=(15, 15), sharex=True, sharey=True)
 
-        for ax, cls in zip(axes.ravel(), self.metrics_by_class):
+        for ax, cls in zip(axes.ravel() if nrows > 1 or ncols > 1 else [axes], self.metrics_by_class):
             try:
                 precision, recall = self.prec_rec_for_class(cls)
             except ZeroDivisionError as e:

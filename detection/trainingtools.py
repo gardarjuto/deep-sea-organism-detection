@@ -2,6 +2,7 @@ import math
 import os
 import sys
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -129,15 +130,52 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
 
 
-def train_svm(descriptors, labels, num_classes, loss='hinge', dual=False, max_iter=1000):
+def train_svm(descriptors, labels, num_classes, C=1.0, loss='hinge', dual=True, max_iter=1000):
     if num_classes != len(set(labels)):
         raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
-    clf = make_pipeline(StandardScaler(), LinearSVC(loss=loss, dual=dual, max_iter=max_iter))
+    clf = make_pipeline(StandardScaler(), LinearSVC(C=C, loss=loss, dual=dual, max_iter=max_iter))
     clf.fit(descriptors, labels)
     return clf
 
 
-def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3), visualise=False):
+def selective_search_roi(image, resize_height=300):
+    scale_factor = resize_height / image.shape[0]
+    resize_width = int(image.shape[1] * scale_factor)
+    image = cv2.resize(image, (resize_width, resize_height))
+
+    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+    ss.setBaseImage(image)
+    ss.switchToSelectiveSearchFast()
+
+    bboxes = (ss.process() / scale_factor).astype(int)
+    return bboxes
+
+
+def get_detections_ss(svm, feature_extractor, image, resize_height=500):
+    detections = {cl: [] for cl in svm.classes_}
+    confidence = {cl: [] for cl in svm.classes_}
+    n_detect = 0
+
+    image = np.transpose(image.numpy(), (1, 2, 0))
+
+    bboxes = selective_search_roi(image, resize_height=resize_height)
+    bboxes = bboxes[(bboxes[:, 2] > 10) & (bboxes[:, 3] > 10)]
+    total = len(bboxes)
+
+    for (x, y, w, h) in bboxes:
+        window = image[y:y + h, x:x + w]
+        pred, conf = get_classification(svm, feature_extractor, window)
+        if pred > 0:
+            detections[pred[0]].append([x, y, x + w, y + h])
+            confidence[pred[0]].append(conf)
+            n_detect += 1
+    return detections, confidence
+
+
+def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
+                   visualise=False):
+    total = 0
+    n_detect = 0
     detections = {cl: [] for cl in svm.classes_}
     confidence = {cl: [] for cl in svm.classes_}
 
@@ -155,7 +193,9 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
             break
         for x, y, window in utils.sliding_window(im_scaled, min_w, step_size):
             pred, conf = get_classification(svm, feature_extractor, window)
-            if conf > 0:
+            total += 1
+            if pred > 0:
+                n_detect += 1
                 detections[pred[0]].append(
                     [int(x * scale_factor), int(y * scale_factor),
                      int((x + min_w[0]) * scale_factor), int((y + min_w[1]) * scale_factor)])
@@ -175,7 +215,7 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
                 for i, ((x0, y0, x1, y1), conf) in enumerate(zip(detections[cl], confidence[cl])):
                     # add bounding boxes to the image
                     box = patches.Rectangle(
-                        (x0, y0), x1-x0, y1-y0, edgecolor="red", facecolor="none"
+                        (x0, y0), x1 - x0, y1 - y0, edgecolor="red", facecolor="none"
                     )
 
                     ax.add_patch(box)
@@ -214,9 +254,10 @@ def evaluate_classifier(
         log_every=None, output_dir=None, plot_pc=True, visualise=False):
     evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
-    for i, (images, targets) in enumerate(loader):
-        detections, conf_scores = get_detections(clf, feature_extractor, images[0], downscale=downscale, min_w=min_w,
-                                                 step_size=step_size, visualise=visualise)
+    for i, (images, targets) in enumerate(loader, start=1):
+        detections, conf_scores = get_detections_ss(clf, feature_extractor,
+                                                    images[0])  # , downscale=downscale, min_w=min_w,
+        # step_size=step_size, visualise=visualise)
         boxes = []
         labels = []
         scores = []
@@ -228,7 +269,7 @@ def evaluate_classifier(
             boxes.extend(filtered_boxes)
             labels.extend([cls for _ in range(len(filtered_boxes))])
             scores.extend(filtered_confidence)
-        predictions = {'boxes': torch.tensor(np.array(boxes)), 'labels': torch.tensor(labels),
+        predictions = {'boxes': torch.tensor(np.array(boxes).reshape(-1, 4)), 'labels': torch.tensor(labels),
                        'scores': torch.tensor(scores)}
 
         evaluator.update(targets[0], predictions)
@@ -238,7 +279,7 @@ def evaluate_classifier(
 
     res = evaluator.summarise(method="101")
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
-                 + ", ".join([f"{key}={val:.3f}" if not isinstance(val, ZeroDivisionError)
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
@@ -247,25 +288,32 @@ def evaluate_classifier(
 
 def mine_hard_negatives(
         svm, feature_extractor, loader, iou_thresh=0.5, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
-        max_per_img=100):
+        max_per_img=50, log_every=None):
     evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
     hard_negatives = []
 
-    for i, (img, targets) in enumerate(loader):
-        print(f"Mining from image {i}/{len(loader)}")
-        detections, conf_scores = get_detections(svm, feature_extractor, img[0], downscale=downscale, min_w=min_w,
-                                                 step_size=step_size)
+    for i, (img, targets) in enumerate(loader, start=1):
+        if log_every and i % log_every == 0:
+            logging.info(f"Mining from image {i}/{len(loader)}")
+        detections, conf_scores = get_detections_ss(svm, feature_extractor, img[0])
+        # detections, conf_scores = get_detections(svm, feature_extractor, img[0], downscale=downscale, min_w=min_w,
+        #                                         step_size=step_size)
         boxes = []
         labels = []
         scores = []
+        reduction = 0
         for cls in detections:
             if not detections[cls]:
                 continue
             filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
                                                                                np.array(conf_scores[cls]))
+            reduction += len(detections[cls]) - len(filtered_boxes)
             boxes.extend(filtered_boxes)
             labels.extend([cls for _ in range(len(filtered_boxes))])
             scores.extend(filtered_confidence)
+
+        if log_every and i % log_every == 0:
+            logging.info(f"Reduced from {reduction + len(boxes)} to {len(boxes)}")
         predictions = {'boxes': torch.tensor(np.array(boxes)), 'labels': torch.tensor(labels),
                        'scores': torch.tensor(scores)}
         hn, hn_scores = evaluator.get_hard_negatives(targets[0], predictions)
@@ -278,6 +326,6 @@ def mine_hard_negatives(
             fd = feature_extractor.extract(cropped_img)
             hard_negatives.append(fd)
 
-        if i > 100:
+        if i > 10:
             break
     return hard_negatives

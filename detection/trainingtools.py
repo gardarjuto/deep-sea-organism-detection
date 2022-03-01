@@ -296,7 +296,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_eve
 def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=50, cpus=1):
     hard_negatives = Parallel(n_jobs=cpus, verbose=100)(
         delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
-        for i, (img, targets) in enumerate(dataset) if i < 4)
+        for img, targets in dataset)
 
     return [fd for sublist in hard_negatives for fd in sublist]
 

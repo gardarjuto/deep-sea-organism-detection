@@ -3,6 +3,7 @@ import logging
 import sys
 import random
 
+import cv2
 import numpy as np
 import torch
 import torch.cuda
@@ -144,5 +145,5 @@ def make_deterministic(seed):
     np.random.seed(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-
+    cv2.setRNGSeed(0)
 

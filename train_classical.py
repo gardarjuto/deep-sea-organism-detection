@@ -67,9 +67,8 @@ def get_args_parser(add_help=True):
     # Hard negative mining parameters
     parser.add_argument("--neg-per-img", default=100, type=int, help="how many hard negatives to mine from each image")
 
-    # OpenCV parameters
-    parser.add_argument("--threads", default=1, type=int,
-                        help="number of threads to use for OpenCV operations such as selective search")
+    # Multicore parameters
+    parser.add_argument("--cpus", default=1, type=int, help="number of cores to use for parallel operations")
     return parser
 
 
@@ -96,8 +95,8 @@ def main(args):
                                                          val_split=args.val_split)
 
     # Create dataloader
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=args.workers, collate_fn=utils.collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=1, num_workers=args.workers, collate_fn=utils.collate_fn)
+    #train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=args.workers, collate_fn=utils.collate_fn)
+    #val_loader = DataLoader(val_dataset, batch_size=1, num_workers=args.workers, collate_fn=utils.collate_fn)
 
     # Create feature extractor
     logging.info("Creating feature extractor...")
@@ -106,7 +105,7 @@ def main(args):
 
     # Extract features
     logging.info("Extracting features...")
-    descriptors, labels = feature_extractor.extract_all(train_loader)
+    descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.cpus)
 
     # Add one background GT for SVM
     logging.info(f"N={len(descriptors)},D={len(descriptors[0])}")
@@ -121,7 +120,7 @@ def main(args):
     clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
 
     cv2.setUseOptimized(True)
-    #cv2.setNumThreads(args.threads)
+    cv2.setNumThreads(1)
 
     """
     # Evaluate
@@ -136,12 +135,9 @@ def main(args):
     for epoch in range(args.epochs):
         # Apply hard negative mining
         logging.info("Performing hard negative mining")
-        negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_loader,
+        negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
                                                              iou_thresh=args.iou_thresh,
-                                                             downscale=args.downscale_factor,
-                                                             min_w=(*args.min_window, 3),
-                                                             step_size=(*args.step_size, 3),
-                                                             log_every=args.log_every)
+                                                             cpus=args.cpus)
 
         # Add hard negatives to training samples
         descriptors.extend(negative_samples)
@@ -155,15 +151,14 @@ def main(args):
         # Train SVM
         logging.info("Training classifier on feature descriptors")
         use_dual = (len(descriptors[0]) > len(descriptors)) or (args.loss == 'hinge')
-        clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
+        clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual,
+                                      max_iter=args.max_iter)
 
         # Evaluate
         logging.info("Evaluating classifier on test dataset")
-        trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, loader=val_loader,
-                                          iou_thresh=args.iou_thresh, downscale=args.downscale_factor,
-                                          min_w=(*args.min_window, 3), step_size=(*args.step_size, 3),
-                                          log_every=args.log_every, output_dir=args.output_dir, plot_pc=args.plot_pc,
-                                          visualise=False)
+        trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, dataset=val_dataset,
+                                          iou_thresh=args.iou_thresh, log_every=args.log_every,
+                                          output_dir=args.output_dir, plot_pc=args.plot_pc, cpus=args.cpus)
 
 
 if __name__ == '__main__':

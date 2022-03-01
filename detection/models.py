@@ -1,4 +1,5 @@
 import numpy as np
+from joblib import Parallel, delayed
 from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
@@ -18,25 +19,25 @@ class HOG:
         self.gamma_corr = gamma_corr
         self.resize_to = resize_to
 
-    def extract_all(self, loader):
-        """Extracts features from all samples from loader"""
+    def extract_all(self, dataset, cpus=1):
+        """Extracts features from all samples from dataset"""
         descriptors = []
         labels = []
-        if isinstance(loader.dataset, datasets.FathomNetDataset):
-            for img, targets in loader:
-                img, targets = img[0], targets[0]
-                for box, label in zip(targets['boxes'], targets['labels']):
-                    x0, y0, x1, y1 = box.int()
-                    cropped = F.crop(img, y0, x0, y1-y0, x1-x0)
-                    fd = self.extract(cropped)
-                    descriptors.append(fd)
-                    labels.append(label.item())
-        elif isinstance(loader.dataset, datasets.FathomNetCroppedDataset):
-            for img, label in loader:
-                img, label = img[0], label[0]
-                fd = self.extract(img)
-                descriptors.append(fd)
-                labels.append(label)
+        if isinstance(dataset, datasets.FathomNetDataset):
+            def process_func(img, box, label):
+                x0, y0, x1, y1 = box.int()
+                cropped = F.crop(img, y0, x0, y1 - y0, x1 - x0)
+                fd = self.extract(cropped)
+                return fd, label.item()
+            res = Parallel(n_jobs=cpus, verbose=100)(delayed(process_func)(img, box, label)
+                                                     for img, targets in dataset
+                                                     for box, label in zip(targets['boxes'], targets['labels']))
+        elif isinstance(dataset, datasets.FathomNetCroppedDataset):
+            res = Parallel(n_jobs=cpus, verbose=100)(
+                delayed(lambda img, label: (self.extract(img), label))(img, label) for img, label in dataset)
+        else:
+            raise NotImplementedError("Dataset of wrong type.")
+        descriptors, labels = list(map(list, zip(*res)))
         return descriptors, labels
 
     def extract(self, image):

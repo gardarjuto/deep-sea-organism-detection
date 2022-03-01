@@ -7,12 +7,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from PIL import Image
+from joblib import delayed, Parallel
 from matplotlib import patches
 from skimage.transform import pyramid_gaussian
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 from sklearn.metrics import confusion_matrix
+from torchvision.ops import box_iou
 from torchvision.transforms import transforms as T, functional as F
 from torchvision.utils import draw_bounding_boxes
 import logging
@@ -138,14 +140,17 @@ def train_svm(descriptors, labels, num_classes, C=1.0, loss='hinge', dual=True, 
     return clf
 
 
-def selective_search_roi(image, resize_height=300):
+def selective_search_roi(image, resize_height=300, quality=True):
     scale_factor = resize_height / image.shape[0]
     resize_width = int(image.shape[1] * scale_factor)
     image = cv2.resize(image, (resize_width, resize_height))
 
     ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
     ss.setBaseImage(image)
-    ss.switchToSelectiveSearchFast()
+    if quality:
+        ss.switchToSelectiveSearchQuality()
+    else:
+        ss.switchToSelectiveSearchFast()
 
     bboxes = (ss.process() / scale_factor).astype(int)
     return bboxes
@@ -174,6 +179,7 @@ def get_detections_ss(svm, feature_extractor, image, resize_height=500):
 
 def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
                    visualise=False):
+    """DEPRECATED. Use get_detections_ss instead."""
     total = 0
     n_detect = 0
     detections = {cl: [] for cl in svm.classes_}
@@ -242,40 +248,41 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
     return detections, confidence
 
 
-def get_classification(svm, feature_extractor, image):
+def get_classification(clf, feature_extractor, image):
     fd = feature_extractor.extract(image)
-    pred = svm.predict(fd.reshape(1, -1))
-    conf = svm.decision_function(fd.reshape(1, -1)).max()
+    pred = clf.predict(fd.reshape(1, -1))
+    conf = clf.decision_function(fd.reshape(1, -1)).max()
     return pred, conf
 
 
-def evaluate_classifier(
-        clf, feature_extractor, loader, iou_thresh=0.5, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
-        log_every=None, output_dir=None, plot_pc=True, visualise=False):
-    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
+def get_predictions(clf, feature_extractor, image):
+    detections, conf_scores = get_detections_ss(clf, feature_extractor, image)
+    boxes = []
+    labels = []
+    scores = []
+    for cls in detections:
+        if not detections[cls]:
+            continue
+        filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
+                                                                           np.array(conf_scores[cls]))
+        boxes.extend(filtered_boxes)
+        labels.extend([cls for _ in range(len(filtered_boxes))])
+        scores.extend(filtered_confidence)
+    predictions = {'boxes': torch.tensor(np.array(boxes).reshape(-1, 4)), 'labels': torch.tensor(labels),
+                   'scores': torch.tensor(scores)}
+    return predictions
+
+
+def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=True,
+                        cpus=1):
+    evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
-    for i, (images, targets) in enumerate(loader, start=1):
-        detections, conf_scores = get_detections_ss(clf, feature_extractor,
-                                                    images[0])  # , downscale=downscale, min_w=min_w,
-        # step_size=step_size, visualise=visualise)
-        boxes = []
-        labels = []
-        scores = []
-        for cls in detections:
-            if not detections[cls]:
-                continue
-            filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
-                                                                               np.array(conf_scores[cls]))
-            boxes.extend(filtered_boxes)
-            labels.extend([cls for _ in range(len(filtered_boxes))])
-            scores.extend(filtered_confidence)
-        predictions = {'boxes': torch.tensor(np.array(boxes).reshape(-1, 4)), 'labels': torch.tensor(labels),
-                       'scores': torch.tensor(scores)}
 
-        evaluator.update(targets[0], predictions)
-
-        if log_every and i % log_every == 0:
-            logging.info(f"Test [{i}/{len(loader)}]")
+    prediction_list = Parallel(n_jobs=cpus, verbose=100)(
+        delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, clf, feature_extractor, image)
+        for image, targets in dataset)
+    for targets, predictions in prediction_list:
+        evaluator.update(targets, predictions)
 
     res = evaluator.summarise(method="101")
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
@@ -286,46 +293,48 @@ def evaluate_classifier(
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
 
 
-def mine_hard_negatives(
-        svm, feature_extractor, loader, iou_thresh=0.5, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
-        max_per_img=50, log_every=None):
-    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device='cpu', iou_thresh=iou_thresh)
+def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=50, cpus=1):
+    hard_negatives = Parallel(n_jobs=cpus, verbose=100)(
+        delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
+        for i, (img, targets) in enumerate(dataset) if i < 4)
+
+    return [fd for sublist in hard_negatives for fd in sublist]
+
+
+def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=50):
     hard_negatives = []
+    detections, conf_scores = get_detections_ss(clf, feature_extractor, image)
+    boxes = []
+    labels = []
+    scores = []
+    for cls in detections:
+        if not detections[cls]:
+            continue
+        filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
+                                                                           np.array(conf_scores[cls]))
+        boxes.extend(filtered_boxes)
+        labels.extend([cls for _ in range(len(filtered_boxes))])
+        scores.extend(filtered_confidence)
 
-    for i, (img, targets) in enumerate(loader, start=1):
-        if log_every and i % log_every == 0:
-            logging.info(f"Mining from image {i}/{len(loader)}")
-        detections, conf_scores = get_detections_ss(svm, feature_extractor, img[0])
-        # detections, conf_scores = get_detections(svm, feature_extractor, img[0], downscale=downscale, min_w=min_w,
-        #                                         step_size=step_size)
-        boxes = []
-        labels = []
-        scores = []
-        reduction = 0
-        for cls in detections:
-            if not detections[cls]:
-                continue
-            filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
-                                                                               np.array(conf_scores[cls]))
-            reduction += len(detections[cls]) - len(filtered_boxes)
-            boxes.extend(filtered_boxes)
-            labels.extend([cls for _ in range(len(filtered_boxes))])
-            scores.extend(filtered_confidence)
+    pred_boxes = torch.tensor(np.array(boxes))
+    pred_labels = torch.tensor(labels)
+    pred_scores = torch.tensor(scores)
 
-        if log_every and i % log_every == 0:
-            logging.info(f"Reduced from {reduction + len(boxes)} to {len(boxes)}")
-        predictions = {'boxes': torch.tensor(np.array(boxes)), 'labels': torch.tensor(labels),
-                       'scores': torch.tensor(scores)}
-        hn, hn_scores = evaluator.get_hard_negatives(targets[0], predictions)
-        n = min(max_per_img, len(hn_scores))
-        top_n_idx = np.argpartition(hn_scores, -n)[-n:]
+    if targets['boxes'].numel() == 0:
+        hn, hn_scores = pred_boxes[pred_labels > 0], pred_scores[pred_labels > 0]
+    elif pred_boxes.numel() == 0:
+        hn, hn_scores = torch.empty(0), torch.empty(0)
+    else:
+        ious = box_iou(targets['boxes'], pred_boxes)
+        negative_idx = (ious.max(dim=0).values < iou_thresh) & (pred_labels > 0)
+        hn, hn_scores = pred_boxes[negative_idx], pred_scores[negative_idx]
 
-        for box in hn[top_n_idx]:
-            x0, y0, x1, y1 = box.int()
-            cropped_img = F.crop(img[0], y0, x0, y1 - y0, x1 - x0)
-            fd = feature_extractor.extract(cropped_img)
-            hard_negatives.append(fd)
+    n = min(limit, len(hn_scores))
+    top_n_idx = np.argpartition(hn_scores, -n)[-n:]
 
-        if i > 10:
-            break
+    for box in hn[top_n_idx]:
+        x0, y0, x1, y1 = box.int()
+        cropped_img = F.crop(image, y0, x0, y1 - y0, x1 - x0)
+        fd = feature_extractor.extract(cropped_img)
+        hard_negatives.append(fd)
     return hard_negatives

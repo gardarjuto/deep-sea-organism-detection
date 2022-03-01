@@ -140,7 +140,7 @@ def train_svm(descriptors, labels, num_classes, C=1.0, loss='hinge', dual=True, 
     return clf
 
 
-def selective_search_roi(image, resize_height=300, quality=True):
+def selective_search_roi(image, resize_height=300, quality=False):
     scale_factor = resize_height / image.shape[0]
     resize_width = int(image.shape[1] * scale_factor)
     image = cv2.resize(image, (resize_width, resize_height))
@@ -156,7 +156,7 @@ def selective_search_roi(image, resize_height=300, quality=True):
     return bboxes
 
 
-def get_detections_ss(svm, feature_extractor, image, resize_height=500):
+def get_detections_ss(svm, feature_extractor, image, resize_height=300):
     detections = {cl: [] for cl in svm.classes_}
     confidence = {cl: [] for cl in svm.classes_}
     n_detect = 0

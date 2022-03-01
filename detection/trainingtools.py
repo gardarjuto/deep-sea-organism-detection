@@ -164,7 +164,7 @@ def get_detections_ss(svm, feature_extractor, image, resize_height=500):
     image = np.transpose(image.numpy(), (1, 2, 0))
 
     bboxes = selective_search_roi(image, resize_height=resize_height)
-    bboxes = bboxes[(bboxes[:, 2] > 10) & (bboxes[:, 3] > 10)]
+    bboxes = bboxes[(bboxes[:, 2] > 3) & (bboxes[:, 3] > 3)]
     total = len(bboxes)
 
     for (x, y, w, h) in bboxes:

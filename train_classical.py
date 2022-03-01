@@ -65,7 +65,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--max-iter", default=1000, type=int, help="maximum iterations in training SVM")
 
     # Hard negative mining parameters
-    parser.add_argument("--neg-per-img", default=100, type=int, help="how many hard negatives to mine from each image")
+    parser.add_argument("--neg-per-img", default=50, type=int, help="how many hard negatives to mine from each image")
 
     # Multicore parameters
     parser.add_argument("--cpus", default=1, type=int, help="number of cores to use for parallel operations")
@@ -136,7 +136,7 @@ def main(args):
         # Apply hard negative mining
         logging.info("Performing hard negative mining")
         negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
-                                                             iou_thresh=args.iou_thresh,
+                                                             iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
                                                              cpus=args.cpus)
 
         # Add hard negatives to training samples

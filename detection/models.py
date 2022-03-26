@@ -4,14 +4,15 @@ from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
-from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
 import torchvision.transforms.functional as F
 
 from detection import datasets, utils
 
 
 class HOG:
-    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys', gamma_corr=False, resize_to=(64, 64)):
+    def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys',
+                 gamma_corr=False, resize_to=(64, 64)):
         self.orientations = orientations
         self.pixels_per_cell = pixels_per_cell
         self.cells_per_block = cells_per_block
@@ -29,11 +30,12 @@ class HOG:
                 cropped = F.crop(img, y0, x0, y1 - y0, x1 - x0)
                 fd = self.extract(cropped)
                 return fd, label.item()
-            res = Parallel(n_jobs=cpus, verbose=100)(delayed(process_func)(img, box, label)
-                                                     for img, targets in dataset
-                                                     for box, label in zip(targets['boxes'], targets['labels']))
+
+            res = Parallel(n_jobs=cpus)(delayed(process_func)(img, box, label)
+                                        for img, targets in dataset
+                                        for box, label in zip(targets['boxes'], targets['labels']))
         elif isinstance(dataset, datasets.FathomNetCroppedDataset):
-            res = Parallel(n_jobs=cpus, verbose=100)(
+            res = Parallel(n_jobs=cpus)(
                 delayed(lambda img, label: (self.extract(img), label))(img, label) for img, label in dataset)
         else:
             raise NotImplementedError("Dataset of wrong type.")
@@ -52,6 +54,9 @@ def load_model(name, num_classes, pretrained=False, progress=True):
         model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=pretrained, progress=progress)
         in_features = model.roi_heads.box_predictor.cls_score.in_features
         model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+    elif name == 'rcnn_resnet101_fpn':
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet101', pretrained=pretrained)
+        model = FasterRCNN(backbone, num_classes=num_classes)
     else:
-        raise NotImplementedError('Currently supported model names: rcnn_resnet50_fpn')
+        raise NotImplementedError('Currently supported model names: rcnn_resnet50_fpn and rcnn_resnet101_fpn')
     return model

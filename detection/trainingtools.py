@@ -10,10 +10,14 @@ from PIL import Image
 from joblib import delayed, Parallel
 from matplotlib import patches
 from skimage.transform import pyramid_gaussian
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import LinearSVC
+from sklearn.linear_model import SGDClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.kernel_approximation import Nystroem
 from sklearn.metrics import confusion_matrix
+from sklearn.decomposition import PCA
+
 from torchvision.ops import box_iou
 from torchvision.transforms import transforms as T, functional as F
 from torchvision.utils import draw_bounding_boxes
@@ -107,7 +111,7 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=True):
     model.eval()
 
-    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset.dataset, device=device, iou_thresh=iou_thresh)
+    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device=device, iou_thresh=iou_thresh)
 
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
@@ -132,10 +136,14 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
 
 
-def train_svm(descriptors, labels, num_classes, C=1.0, loss='hinge', dual=True, max_iter=1000):
+def train_svm(descriptors, labels, num_classes, pca_components=200, feature_map_gamma=1e-4, feature_map_components=700,
+              sgd_alpha=3e-8, class_weight='balanced', fit_intercept=False, max_iter=100000):
     if num_classes != len(set(labels)):
         raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
-    clf = make_pipeline(StandardScaler(), LinearSVC(C=C, loss=loss, dual=dual, max_iter=max_iter))
+    clf = Pipeline(steps=[('scaler', StandardScaler()), ('pca', PCA(n_components=pca_components)),
+                          ('feature_map', Nystroem(gamma=feature_map_gamma, n_components=feature_map_components)),
+                          ('model', SGDClassifier(alpha=sgd_alpha, class_weight=class_weight,
+                                                  fit_intercept=fit_intercept, max_iter=max_iter))])
     clf.fit(descriptors, labels)
     return clf
 
@@ -278,7 +286,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_eve
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
 
-    prediction_list = Parallel(n_jobs=cpus, verbose=100)(
+    prediction_list = Parallel(n_jobs=cpus)(
         delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, clf, feature_extractor, image)
         for image, targets in dataset)
     for targets, predictions in prediction_list:
@@ -291,10 +299,11 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_eve
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
+    return res
 
 
 def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=50, cpus=1):
-    hard_negatives = Parallel(n_jobs=cpus, verbose=100)(
+    hard_negatives = Parallel(n_jobs=cpus)(
         delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
         for img, targets in dataset)
 

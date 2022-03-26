@@ -112,8 +112,8 @@ def main(args):
 
     # Load data
     logging.info("Loading dataset...")
-    train_dataset, test_dataset = datasets.load_datasets(name=args.dataset, root=args.data_path, classes=classes,
-                                                         train_ratio=args.train_ratio)
+    train_dataset, test_dataset = datasets.load_train_val(name=args.dataset, train_path=args.data_path, classes=classes,
+                                                          val_split=1-args.train_ratio)
 
     logging.info("Creating data loaders...")
     if args.distributed:

@@ -94,10 +94,6 @@ def main(args):
     train_dataset, val_dataset = datasets.load_train_val(name=args.dataset, train_path=args.train_path, classes=classes,
                                                          val_split=args.val_split)
 
-    # Create dataloader
-    #train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=args.workers, collate_fn=utils.collate_fn)
-    #val_loader = DataLoader(val_dataset, batch_size=1, num_workers=args.workers, collate_fn=utils.collate_fn)
-
     # Create feature extractor
     logging.info("Creating feature extractor...")
     feature_extractor = models.HOG(orientations=args.hog_bins, pixels_per_cell=args.ppc, cells_per_block=args.cpb,
@@ -115,22 +111,21 @@ def main(args):
 
     # Train SVM
     logging.info("Training classifier on feature descriptors")
-    use_dual = (len(descriptors[0]) > len(descriptors))
-    logging.info("Using dual" if use_dual else "Not using dual")
-    clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual, max_iter=args.max_iter)
+    clf = trainingtools.train_svm(descriptors, labels, num_classes, pca_components=args.pca_components,
+                                  feature_map_gamma=args.feature_map_gamma,
+                                  feature_map_components=args.feature_map_components,
+                                  sgd_alpha=args.sgd_alpha, class_weight=args.class_weight,
+                                  fit_intercept=args.fit_intercept, max_iter=args.max_iter)
 
     cv2.setUseOptimized(True)
     cv2.setNumThreads(1)
 
-    """
     # Evaluate
     logging.info("Evaluating classifier on test dataset")
-    trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, loader=val_loader,
-                                      iou_thresh=args.iou_thresh, downscale=args.downscale_factor,
-                                      min_w=(*args.min_window, 3), step_size=(*args.step_size, 3),
-                                      log_every=args.log_every, output_dir=args.output_dir, plot_pc=args.plot_pc,
-                                      visualise=False)
-    """
+    trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, dataset=val_dataset,
+                                      iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
+                                      plot_pc=args.plot_pc, cpus=args.cpus)
+
     # Apply training procedure
     for epoch in range(args.epochs):
         # Apply hard negative mining
@@ -145,14 +140,16 @@ def main(args):
         logging.info(f"Added {len(negative_samples)} negative samples to the previous {len(descriptors) - len(negative_samples)} total")
 
         # Save descriptors
-        with open(os.path.join(args.output_dir, f"saved_descriptors_epoch_{epoch}.pickle"), "wb") as f:
+        with open(os.path.join(args.output_dir, f"saved_descriptors_SGDNystroem_epoch_{epoch}.pickle"), "wb") as f:
             pickle.dump({'descriptors': descriptors, 'labels': labels}, f)
 
         # Train SVM
         logging.info("Training classifier on feature descriptors")
-        use_dual = (len(descriptors[0]) > len(descriptors)) or (args.loss == 'hinge')
-        clf = trainingtools.train_svm(descriptors, labels, num_classes, C=args.C, loss=args.loss, dual=use_dual,
-                                      max_iter=args.max_iter)
+        clf = trainingtools.train_svm(descriptors, labels, num_classes, pca_components=args.pca_components,
+                                      feature_map_gamma=args.feature_map_gamma,
+                                      feature_map_components=args.feature_map_components,
+                                      sgd_alpha=args.sgd_alpha, class_weight=args.class_weight,
+                                      fit_intercept=args.fit_intercept, max_iter=args.max_iter)
 
         # Evaluate
         logging.info("Evaluating classifier on test dataset")

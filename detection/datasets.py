@@ -14,7 +14,7 @@ from detection.fathomnethelper.json_loader import Taxonomicon
 
 
 class FathomNetDataset(torch.utils.data.Dataset):
-    def __init__(self, root, classes=None, transforms=None, subset=None):
+    def __init__(self, root, classes=None, transforms=None, subset=None, remove_empty=False):
         self.root = root
         self.transforms = transforms
         self.imgs = list(sorted(os.listdir(os.path.join(root, 'images'))))
@@ -36,6 +36,19 @@ class FathomNetDataset(torch.utils.data.Dataset):
                 raise TypeError('Class definition needs to be of type list or dict.')
             for node in nodes:
                 self.class_mapping[node] = cls
+
+        if remove_empty:
+            valid_indices = []
+            for idx in range(len(self.imgs)):
+                ann_path = os.path.join(self.root, 'annotations', self.anns[idx])
+                tree_root = ElementTree.parse(ann_path).getroot()
+                for box in tree_root.iter('object'):
+                    name = box.find('name').text
+                    if name in self.class_mapping:
+                        valid_indices.append(idx)
+                        break
+            self.imgs = [self.imgs[i] for i in valid_indices]
+            self.anns = [self.anns[i] for i in valid_indices]
 
     def __getitem__(self, idx):
         img_path = os.path.join(self.root, 'images', self.imgs[idx])
@@ -172,6 +185,25 @@ class RandomHorizontalFlip(T.RandomHorizontalFlip):
         return image, target
 
 
+class ColorJitter(T.ColorJitter):
+    def forward(self, img, target):
+        fn_idx, brightness_factor, contrast_factor, saturation_factor, hue_factor = self.get_params(self.brightness,
+                                                                                                    self.contrast,
+                                                                                                    self.saturation,
+                                                                                                    self.hue)
+        for fn_id in fn_idx:
+            if fn_id == 0 and brightness_factor is not None:
+                img = F.adjust_brightness(img, brightness_factor)
+            elif fn_id == 1 and contrast_factor is not None:
+                img = F.adjust_contrast(img, contrast_factor)
+            elif fn_id == 2 and saturation_factor is not None:
+                img = F.adjust_saturation(img, saturation_factor)
+            elif fn_id == 3 and hue_factor is not None:
+                img = F.adjust_hue(img, hue_factor)
+
+        return img, target
+
+
 def load_datasets(name, root, classes, train_ratio):
     """DEPRECATED"""
     if name == 'FathomNet':
@@ -197,11 +229,11 @@ def load_datasets(name, root, classes, train_ratio):
 
 def load_train_val(name, train_path, classes, val_split):
     if name == 'FathomNet':
-        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
+        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()]) #, ColorJitter(brightness=.5, contrast=.5, hue=.3)])
         val_transforms = Compose([ToTensor()])
         length = len(os.listdir(os.path.join(train_path, 'images')))
         train_idx, val_idx = train_test_split(range(length), test_size=val_split)
-        train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx)
+        train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx, remove_empty=True)
         val_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
     elif name == 'FathomNetCropped':
         train_transforms = T.Compose([T.ToTensor(), T.RandomHorizontalFlip()])

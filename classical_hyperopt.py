@@ -124,7 +124,7 @@ if __name__ == '__main__':
     utils.initialise_logging(args)
     utils.make_deterministic(42)
 
-    with open('classes', "r") as f:
+    with open(args.class_file, "r") as f:
         classes = json.load(f)
     num_classes = len(classes) + 1
 

@@ -31,9 +31,8 @@ class HOG:
                 fd = self.extract(cropped)
                 return fd, label.item()
 
-            res = Parallel(n_jobs=cpus)(delayed(process_func)(img, box, label)
-                                        for img, targets in dataset
-                                        for box, label in zip(targets['boxes'], targets['labels']))
+            res = [pair for pairs in Parallel(n_jobs=cpus)(delayed(self.extract_from_sample)(img, targets)
+                                                           for img, targets in dataset) for pair in pairs]
         elif isinstance(dataset, datasets.FathomNetCroppedDataset):
             res = Parallel(n_jobs=cpus)(
                 delayed(lambda img, label: (self.extract(img), label))(img, label) for img, label in dataset)
@@ -41,6 +40,15 @@ class HOG:
             raise NotImplementedError("Dataset of wrong type.")
         descriptors, labels = list(map(list, zip(*res)))
         return descriptors, labels
+
+    def extract_from_sample(self, image, targets):
+        res = []
+        for box, label in zip(targets['boxes'], targets['labels']):
+            x0, y0, x1, y1 = box.int()
+            cropped = F.crop(image, y0, x0, y1 - y0, x1 - x0)
+            fd = self.extract(cropped)
+            res.append((fd, label.item()))
+        return res
 
     def extract(self, image):
         im_resized = resize(image, self.resize_to, anti_aliasing=True)

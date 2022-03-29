@@ -130,7 +130,8 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
 
     res = evaluator.summarise(method="101")
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
-                 + ", ".join([f"{key}={val:.3f}" for key, val in res.items() if key != 'mAP']))
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)

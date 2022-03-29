@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 
+import numpy as np
 import plotly
 import torch
 import optuna
@@ -139,8 +140,9 @@ class Objective(object):
             res = trainingtools.evaluate(model, loader=val_loader, device=device, epoch=epoch,
                                          iou_thresh=self.iou_thresh, plot_pc=False)
 
-            trial.report(res["mAP"], epoch)
-            best_mAP = max(best_mAP, res["mAP"])
+            mAP = res["mAP"] if np.isfinite(res["mAP"]) else 0.0
+            trial.report(mAP, epoch)
+            best_mAP = max(best_mAP, mAP)
 
             logging.info(f"Saving a checkpoint in epoch {epoch}.")
             checkpoint = {
@@ -148,7 +150,7 @@ class Objective(object):
                 "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
                 "epoch": epoch,
-                "mAP": res["mAP"]
+                "mAP": mAP
             }
             torch.save(checkpoint, tmp_checkpoint_path)
             shutil.move(tmp_checkpoint_path, checkpoint_path)

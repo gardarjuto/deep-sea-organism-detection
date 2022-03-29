@@ -43,7 +43,7 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--seed", type=int, default=None, help="fix random generator seed. Setting this forces a deterministic run"
     )
-
+    parser.add_argument("--n-threads", default=None, type=int, help="CPU threads to use if device=cpu")
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
     return parser
 
@@ -165,6 +165,8 @@ if __name__ == '__main__':
     utils.initialise_logging(args)
     utils.make_deterministic(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
+    if args.n_threads:
+        torch.set_num_threads(args.n_threads)
 
     with open(args.class_file, "r") as f:
         classes = json.load(f)

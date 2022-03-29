@@ -26,7 +26,7 @@ import logging
 from detection import utils, evaluation, datasets
 
 
-def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every=None, scaler=None):
+def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every=None, scaler=None):
     model.train()
 
     total_loss_classifier = 0.0
@@ -36,11 +36,11 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
 
     lr_scheduler = None
     if epoch == 0:
-        warmup_factor = 1.0 / 1000
+        warmup_factor = 1e-3
         warmup_iters = min(1000, len(loader) - 1)
 
         lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimiser, start_factor=warmup_factor, total_iters=warmup_iters
+            optimizer, start_factor=warmup_factor, total_iters=warmup_iters
         )
 
     for i, (images, targets) in enumerate(loader, start=1):
@@ -63,20 +63,20 @@ def train_one_epoch(model, loader, device, optimiser, epoch, n_epochs, log_every
         total_loss_objectness += loss_dict['loss_objectness']
         total_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg']
 
-        optimiser.zero_grad()
+        optimizer.zero_grad()
         if scaler is not None:
             scaler.scale(losses).backward()
-            scaler.step(optimiser)
+            scaler.step(optimizer)
             scaler.update()
         else:
             losses.backward()
-            optimiser.step()
+            optimizer.step()
 
         if lr_scheduler is not None:
             lr_scheduler.step()
 
         if log_every and i % log_every == 0:
-            logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  LR={optimiser.param_groups[0]['lr']}  " +
+            logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  LR={optimizer.param_groups[0]['lr']}  " +
                          ", ".join([f"{loss_type}={loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
 
     logging.info(f'Summary:')
@@ -134,6 +134,7 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
+    return res
 
 
 def train_svm(descriptors, labels, num_classes, pca_components=200, feature_map_gamma=1e-4, feature_map_components=700,

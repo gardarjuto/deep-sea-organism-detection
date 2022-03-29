@@ -61,7 +61,6 @@ def get_args_parser(add_help=True):
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
     )
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
-    parser.add_argument("--resume", default="", type=str, help="path of checkpoint")
     parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
     parser.add_argument("--rpn-score-thresh", default=None, type=float, help="rpn score threshold for faster-rcnn")
     parser.add_argument(
@@ -146,15 +145,15 @@ def main(args):
 
     # Observe that all parameters are being optimized
     params = [p for p in model.parameters() if p.requires_grad]
-    optimiser = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
 
     args.lr_scheduler = args.lr_scheduler.lower()
     if args.lr_scheduler == "multisteplr":
-        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimiser, milestones=args.lr_steps, gamma=args.lr_gamma)
+        lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
     elif args.lr_scheduler == "cosineannealinglr":
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimiser, T_max=args.epochs)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     else:
         raise RuntimeError(
             f"Invalid lr scheduler '{args.lr_scheduler}'. Only MultiStepLR and CosineAnnealingLR are supported."
@@ -164,7 +163,7 @@ def main(args):
         logging.info("Resuming from checkpoint...")
         checkpoint = torch.load(args.checkpoint, map_location="cpu")
         model_without_ddp.load_state_dict(checkpoint["model"])
-        optimiser.load_state_dict(checkpoint["optimiser"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
         lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
         args.start_epoch = checkpoint["epoch"] + 1
         if args.amp:
@@ -187,7 +186,7 @@ def main(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         # Train one epoch
-        trainingtools.train_one_epoch(model, train_loader, device=device, optimiser=optimiser,
+        trainingtools.train_one_epoch(model, train_loader, device=device, optimizer=optimizer,
                                       epoch=epoch, n_epochs=args.epochs, log_every=args.log_every, scaler=scaler)
 
         # Update the learning rate
@@ -198,7 +197,7 @@ def main(args):
             logging.info("Saving checkpoint...")
             checkpoint = {
                 "model": model_without_ddp.state_dict(),
-                "optimiser": optimiser.state_dict(),
+                "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
                 "args": args,
                 "epoch": epoch,

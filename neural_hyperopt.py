@@ -46,11 +46,13 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument("--n-threads", default=None, type=int, help="CPU threads to use if device=cpu")
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
+    parser.add_argument("--n-gpus", type=int, default=1, help="number of GPUs to use if device=cuda")
     return parser
 
 
 class Objective(object):
-    def __init__(self, train_dataset, val_dataset, classes, workers, device, model, epochs, checkpoint_dir, iou_thresh):
+    def __init__(self, train_dataset, val_dataset, classes, workers, device, model, epochs, checkpoint_dir, iou_thresh,
+                 n_gpus):
         # Hold this implementation specific arguments as the fields of the class.
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
@@ -61,6 +63,7 @@ class Objective(object):
         self.epochs = epochs
         self.checkpoint_dir = checkpoint_dir
         self.iou_thresh = iou_thresh
+        self.n_gpus = n_gpus
 
     def __call__(self, trial):
         logging.info("Started")
@@ -83,6 +86,10 @@ class Objective(object):
         logging.info("Loading model...")
         model = models.load_model(self.model, num_classes=num_classes, pretrained=True)
         model = model.to(device)
+        model_without_dp = model
+        if self.n_gpus > 1:
+            model = nn.DataParallel(model)
+            model_without_dp = model.module
 
         # Observe that all parameters are being optimized
         params = [p for p in model.parameters() if p.requires_grad]
@@ -106,7 +113,7 @@ class Objective(object):
             epoch = checkpoint["epoch"]
             start_epoch = epoch + 1
             logging.info(f"Loading a checkpoint from trial {trial_number} in epoch {epoch}.")
-            model.load_state_dict(checkpoint["model"])
+            model_without_dp.load_state_dict(checkpoint["model"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
             mAP = checkpoint["mAP"]
@@ -146,7 +153,7 @@ class Objective(object):
 
             logging.info(f"Saving a checkpoint in epoch {epoch}.")
             checkpoint = {
-                "model": model.state_dict(),
+                "model": model_without_dp.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "lr_scheduler": lr_scheduler.state_dict(),
                 "epoch": epoch,
@@ -180,7 +187,7 @@ if __name__ == '__main__':
                                                          val_split=1-args.train_ratio)
 
     objective = Objective(train_dataset, val_dataset, classes, args.workers, args.device, args.model, args.epochs,
-                          args.checkpoint_dir, args.iou_thresh)
+                          args.checkpoint_dir, args.iou_thresh, args.n_gpus)
     storage = optuna.storages.RDBStorage(
         "sqlite:///" + os.path.join(args.checkpoint_dir, "neural_hyperopt.db"),
         heartbeat_interval=1,

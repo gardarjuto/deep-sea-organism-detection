@@ -27,6 +27,12 @@ def initialise_distributed(args):
     torch.distributed.barrier(device_ids=[args.gpu])
 
 
+def get_world_size():
+    if "WORLD_SIZE" in os.environ:
+        return int(os.environ["WORLD_SIZE"])
+    return 1
+
+
 def initialise_logging(args):
     if not is_master_process():
         logging.disable()

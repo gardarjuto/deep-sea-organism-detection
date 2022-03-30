@@ -6,6 +6,7 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.distributed as dist
 from PIL import Image
 from joblib import delayed, Parallel
 from matplotlib import patches
@@ -108,11 +109,13 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 
 
 @torch.inference_mode()
-def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=True):
+def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=False):
     model.eval()
 
-    evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device=device, iou_thresh=iou_thresh)
+    if utils.is_master_process():
+        evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device=device, iou_thresh=iou_thresh)
 
+    result = []
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
@@ -122,20 +125,26 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
 
         predictions = model(images)
         predictions = [{k: v.to(device) for k, v in t.items()} for t in predictions]
-
-        evaluator.update(targets[0], predictions[0])
+        result.append((targets, predictions))
 
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
 
-    res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+    output = [None for _ in range(utils.get_world_size())]
+    dist.gather_object(result, output, dst=0)
+
+    if utils.is_master_process():
+        for res in result:
+            for targ, pred in res:
+                evaluator.update(targ, pred)
+        res = evaluator.summarise(method="101")
+        logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
-    if plot_pc:
-        axes = evaluator.plot_precision_recall(interpolate=True)
-        plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
-    return res
+        if plot_pc:
+            axes = evaluator.plot_precision_recall(interpolate=True)
+            plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
+        return res
 
 
 def train_svm(descriptors, labels, num_classes, pca_components=200, feature_map_gamma=1e-4, feature_map_components=700,

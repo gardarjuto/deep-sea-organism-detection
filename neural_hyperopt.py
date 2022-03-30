@@ -70,9 +70,12 @@ class Objective(object):
 
     def __call__(self, single_trial):
         logging.info("Started")
+        device = torch.device(self.device)
+        logging.info(f"Using device: {device}")
+
         trial = single_trial
         if self.distributed:
-            trial = optuna.integration.TorchDistributedTrial(single_trial)
+            trial = optuna.integration.TorchDistributedTrial(single_trial, device=device)
 
         logging.info("Creating data loaders...")
         if self.distributed:
@@ -90,10 +93,8 @@ class Objective(object):
                                 collate_fn=utils.collate_fn)
 
         # Load model
-        device = torch.device(self.device)
-        logging.info(f"Using device: {device}")
         logging.info("Loading model...")
-        model = models.load_model(self.model, num_classes=num_classes, pretrained=True)
+        model = models.load_model(self.model, num_classes=len(self.classes)+1, pretrained=True)
         model = model.to(device)
         model_without_ddp = model
         if self.distributed:
@@ -190,9 +191,7 @@ class Objective(object):
         return best_mAP
 
 
-if __name__ == '__main__':
-    # Parse arguments
-    args = get_args_parser().parse_args()
+def main(args):
     utils.initialise_distributed(args)
     utils.initialise_logging(args)
     if args.distributed:
@@ -203,7 +202,6 @@ if __name__ == '__main__':
 
     with open(args.class_file, "r") as f:
         classes = json.load(f)
-    num_classes = len(classes) + 1
 
     # Load data
     logging.info("Loading dataset...")
@@ -256,3 +254,9 @@ if __name__ == '__main__':
         plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'contour.html'))
         fig = plot_parallel_coordinate(study)
         plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'parallel_coordinate.html'))
+
+
+if __name__ == '__main__':
+    # Parse arguments
+    parsed_args = get_args_parser().parse_args()
+    main(parsed_args)

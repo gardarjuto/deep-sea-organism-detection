@@ -70,7 +70,7 @@ class Objective(object):
 
     def __call__(self, single_trial):
         logging.info("Started")
-        device = torch.device(self.device)
+        device = torch.device(self.device, self.gpu)
         logging.info(f"Using device: {device}")
 
         trial = single_trial

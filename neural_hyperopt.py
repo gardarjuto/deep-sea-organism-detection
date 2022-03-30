@@ -10,7 +10,9 @@ import optuna
 from optuna.storages import RetryFailedTrialCallback
 from optuna.visualization import plot_intermediate_values, plot_contour, plot_parallel_coordinate, \
     plot_optimization_history
+from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
+import torch.distributed as dist
 from detection import models, utils, datasets
 from detection import trainingtools
 import logging
@@ -43,13 +45,16 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--seed", type=int, default=None, help="fix random generator seed. Setting this forces a deterministic run"
     )
-    parser.add_argument("--n-threads", default=None, type=int, help="CPU threads to use if device=cpu")
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
+
+    # distributed training parameters
+    parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
     return parser
 
 
 class Objective(object):
-    def __init__(self, train_dataset, val_dataset, classes, workers, device, model, epochs, checkpoint_dir, iou_thresh):
+    def __init__(self, train_dataset, val_dataset, classes, workers, device, model, epochs, checkpoint_dir, iou_thresh,
+                 distributed, gpu):
         # Hold this implementation specific arguments as the fields of the class.
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
@@ -60,12 +65,20 @@ class Objective(object):
         self.epochs = epochs
         self.checkpoint_dir = checkpoint_dir
         self.iou_thresh = iou_thresh
+        self.distributed = distributed
+        self.gpu = gpu
 
-    def __call__(self, trial):
+    def __call__(self, single_trial):
         logging.info("Started")
+        trial = single_trial
+        if self.distributed:
+            trial = optuna.integration.TorchDistributedTrial(single_trial)
 
         logging.info("Creating data loaders...")
-        train_sampler = torch.utils.data.RandomSampler(self.train_dataset)
+        if self.distributed:
+            train_sampler = torch.utils.data.distributed.DistributedSampler(self.train_dataset, shuffle=True)
+        else:
+            train_sampler = torch.utils.data.RandomSampler(self.train_dataset)
         val_sampler = torch.utils.data.SequentialSampler(self.val_dataset)
 
         batch_size = trial.suggest_int("batch size", 1, 8)
@@ -82,6 +95,10 @@ class Objective(object):
         logging.info("Loading model...")
         model = models.load_model(self.model, num_classes=num_classes, pretrained=True)
         model = model.to(device)
+        model_without_ddp = model
+        if self.distributed:
+            model = DistributedDataParallel(model, device_ids=[self.gpu])
+            model_without_ddp = model.module
 
         # Observe that all parameters are being optimized
         params = [p for p in model.parameters() if p.requires_grad]
@@ -101,11 +118,11 @@ class Objective(object):
         checkpoint_exists = os.path.isfile(checkpoint_path)
 
         if trial_number is not None and checkpoint_exists:
-            checkpoint = torch.load(checkpoint_path)
+            checkpoint = torch.load(checkpoint_path, map_location="cpu")
             epoch = checkpoint["epoch"]
             start_epoch = epoch + 1
             logging.info(f"Loading a checkpoint from trial {trial_number} in epoch {epoch}.")
-            model.load_state_dict(checkpoint["model"])
+            model_without_ddp.load_state_dict(checkpoint["model"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
             mAP = checkpoint["mAP"]
@@ -113,7 +130,7 @@ class Objective(object):
             trial_checkpoint_dir = os.path.join(self.checkpoint_dir, str(trial.number))
             checkpoint_path = os.path.join(trial_checkpoint_dir, "model.pt")
             start_epoch = 0
-            mAP = 0
+            mAP = 0.0
 
         os.makedirs(trial_checkpoint_dir, exist_ok=True)
         # A checkpoint may be corrupted when the process is killed during `torch.save`.
@@ -127,6 +144,8 @@ class Objective(object):
         # Train the model
         logging.info("Beginning training:")
         for epoch in range(start_epoch, self.epochs):
+            if self.distributed:
+                train_sampler.set_epoch(epoch)
 
             # Train one epoch
             trainingtools.train_one_epoch(model, train_loader, device=device, optimizer=optimizer,
@@ -135,24 +154,35 @@ class Objective(object):
             # Update the learning rate
             lr_scheduler.step()
 
-            # Evaluate on the test data
-            res = trainingtools.evaluate(model, loader=val_loader, device=device, epoch=epoch,
-                                         iou_thresh=self.iou_thresh, plot_pc=False)
+            mAP = 0.0
+            if utils.is_master_process():
+                # Evaluate on the test data
+                res = trainingtools.evaluate(model_without_ddp, loader=val_loader, device=device, epoch=epoch,
+                                             iou_thresh=self.iou_thresh, plot_pc=False)
+                mAP = res["mAP"] if np.isfinite(res["mAP"]) else 0.0
 
-            mAP = res["mAP"] if np.isfinite(res["mAP"]) else 0.0
+            map_tensor = torch.tensor([mAP]).to(self.device)
+            if self.distributed:
+                dist.barrier()
+                dist.all_reduce(map_tensor)
+            mAP = map_tensor.item()
+
             trial.report(mAP, epoch)
             best_mAP = max(best_mAP, mAP)
 
             logging.info(f"Saving a checkpoint in epoch {epoch}.")
-            checkpoint = {
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "lr_scheduler": lr_scheduler.state_dict(),
-                "epoch": epoch,
-                "mAP": mAP
-            }
-            torch.save(checkpoint, tmp_checkpoint_path)
-            shutil.move(tmp_checkpoint_path, checkpoint_path)
+            if utils.is_master_process():
+                checkpoint = {
+                    "model": model_without_ddp.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "lr_scheduler": lr_scheduler.state_dict(),
+                    "epoch": epoch,
+                    "mAP": mAP
+                }
+                torch.save(checkpoint, tmp_checkpoint_path)
+                shutil.move(tmp_checkpoint_path, checkpoint_path)
+            if self.distributed:
+                dist.barrier()
 
             # Handle pruning based on the intermediate value.
             if trial.should_prune():
@@ -163,11 +193,13 @@ class Objective(object):
 if __name__ == '__main__':
     # Parse arguments
     args = get_args_parser().parse_args()
+    utils.initialise_distributed(args)
     utils.initialise_logging(args)
+    if args.distributed:
+        logging.info(f"Distributed run with {args.world_size} processes")
+
     utils.make_deterministic(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
-    if args.n_threads:
-        torch.set_num_threads(args.n_threads)
 
     with open(args.class_file, "r") as f:
         classes = json.load(f)
@@ -179,39 +211,48 @@ if __name__ == '__main__':
                                                          val_split=1-args.train_ratio)
 
     objective = Objective(train_dataset, val_dataset, classes, args.workers, args.device, args.model, args.epochs,
-                          args.checkpoint_dir, args.iou_thresh)
-    storage = optuna.storages.RDBStorage(
-        "sqlite:///" + os.path.join(args.checkpoint_dir, "neural_hyperopt.db"),
-        heartbeat_interval=1,
-        failed_trial_callback=RetryFailedTrialCallback(),
-    )
-    study = optuna.create_study(
-        storage=storage, study_name="pytorch_checkpoint", direction="maximize", load_if_exists=True
-    )
-    study.optimize(objective, n_trials=args.n_trials, timeout=600)
+                          args.checkpoint_dir, args.iou_thresh, args.distributed, args.gpu if args.distributed else 1)
 
-    pruned_trials = study.get_trials(states=(optuna.trial.TrialState.PRUNED,))
-    complete_trials = study.get_trials(states=(optuna.trial.TrialState.COMPLETE,))
+    if utils.is_master_process():
+        storage = optuna.storages.RDBStorage(
+            "sqlite:///" + os.path.join(args.checkpoint_dir, "neural_hyperopt.db"),
+            heartbeat_interval=1,
+            failed_trial_callback=RetryFailedTrialCallback(),
+        )
+        study = optuna.create_study(
+            storage=storage, study_name="pytorch_checkpoint", direction="maximize", load_if_exists=True
+        )
+        study.optimize(objective, n_trials=args.n_trials)
+    else:
+        for _ in range(args.n_trials):
+            try:
+                objective(None)
+            except optuna.TrialPruned:
+                pass
 
-    logging.info("Study statistics: ")
-    logging.info(f"  Number of finished trials: {len(study.trials)}")
-    logging.info(f"  Number of pruned trials: {len(pruned_trials)}")
-    logging.info(f"  Number of complete trials: {len(complete_trials)}")
+    if utils.is_master_process():
+        pruned_trials = study.get_trials(states=(optuna.trial.TrialState.PRUNED,))
+        complete_trials = study.get_trials(states=(optuna.trial.TrialState.COMPLETE,))
 
-    logging.info("Best trial:")
-    trial = study.best_trial
+        logging.info("Study statistics: ")
+        logging.info(f"  Number of finished trials: {len(study.trials)}")
+        logging.info(f"  Number of pruned trials: {len(pruned_trials)}")
+        logging.info(f"  Number of complete trials: {len(complete_trials)}")
 
-    logging.info(f"  Value: {trial.value}")
+        logging.info("Best trial:")
+        trial = study.best_trial
 
-    logging.info("  Params: ")
-    for key, value in trial.params.items():
-        logging.info(f"    {key}: {value}")
+        logging.info(f"  Value: {trial.value}")
 
-    fig = plot_intermediate_values(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'intermediate_values.html'))
-    fig = plot_optimization_history(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'optimization_history.html'))
-    fig = plot_contour(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'contour.html'))
-    fig = plot_parallel_coordinate(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'parallel_coordinate.html'))
+        logging.info("  Params: ")
+        for key, value in trial.params.items():
+            logging.info(f"    {key}: {value}")
+
+        fig = plot_intermediate_values(study)
+        plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'intermediate_values.html'))
+        fig = plot_optimization_history(study)
+        plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'optimization_history.html'))
+        fig = plot_contour(study)
+        plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'contour.html'))
+        fig = plot_parallel_coordinate(study)
+        plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'parallel_coordinate.html'))

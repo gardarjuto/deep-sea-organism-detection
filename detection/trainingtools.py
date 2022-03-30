@@ -131,7 +131,7 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
             logging.info(f"Test [{i}/{len(loader)}]")
 
     output = [None for _ in range(utils.get_world_size())]
-    dist.gather_object(result, output, dst=0)
+    dist.gather_object(result, output if utils.is_master_process() else None, dst=0)
 
     if utils.is_master_process():
         for res in result:

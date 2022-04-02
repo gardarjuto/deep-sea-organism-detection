@@ -65,6 +65,12 @@ def load_model(name, num_classes, pretrained=False, progress=True):
     elif name == 'rcnn_resnet101_fpn':
         backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet101', pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
+    elif name == 'rcnn_resnet34_fpn':
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet34', pretrained=pretrained)
+        model = FasterRCNN(backbone, num_classes=num_classes)
+    elif name == 'rcnn_resnet18_fpn':
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet18', pretrained=pretrained)
+        model = FasterRCNN(backbone, num_classes=num_classes)
     else:
         raise NotImplementedError('Currently supported model names: rcnn_resnet50_fpn and rcnn_resnet101_fpn')
     return model

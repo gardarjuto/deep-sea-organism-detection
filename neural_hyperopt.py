@@ -38,6 +38,7 @@ def get_args_parser(add_help=True):
         "--seed", type=int, default=None, help="fix random generator seed. Setting this forces a deterministic run"
     )
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
+    parser.add_argument("--study-name", type=str, help="name of optimization study")
 
     return parser
 

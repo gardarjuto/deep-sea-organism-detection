@@ -17,6 +17,7 @@ def get_args_parser(add_help=True):
                                      add_help=add_help)
     parser.add_argument("--data-path", default="data", type=str, help="dataset path")
     parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
+    parser.add_argument("--db-login", type=str, help="path to database login file")
     parser.add_argument("--model", default="rcnn_resnet50_fpn", type=str, help="model name")
     parser.add_argument("--device", default="cuda", type=str, help="device (Use cuda or cpu Default: cuda)")
     parser.add_argument(
@@ -138,7 +139,7 @@ def main(args):
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,
         sampler=optuna.samplers.TPESampler(seed=args.seed, multivariate=True, group=True, constant_liar=True),
-        pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=args.epochs, reduction_factor=3, )
+        pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=args.epochs, reduction_factor=3)
     )
     study.optimize(objective, n_trials=args.n_trials)
 

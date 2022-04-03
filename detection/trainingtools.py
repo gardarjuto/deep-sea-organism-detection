@@ -56,7 +56,7 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
         if not math.isfinite(loss_value):
             logging.error(f"Loss is {loss_value}, stopping training")
             logging.error(loss_dict)
-            sys.exit(1)
+            return -1
 
         total_loss_classifier += loss_dict['loss_classifier']
         total_loss_box_reg += loss_dict['loss_box_reg']

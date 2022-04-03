@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
+from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
 import torchvision.transforms.functional as F
 
@@ -59,9 +60,8 @@ class HOG:
 
 def load_model(name, num_classes, pretrained=False, progress=True):
     if name == 'rcnn_resnet50_fpn':
-        model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=pretrained, progress=progress)
-        in_features = model.roi_heads.box_predictor.cls_score.in_features
-        model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet50', pretrained=pretrained)
+        model = FasterRCNN(backbone, num_classes=num_classes)
     elif name == 'rcnn_resnet101_fpn':
         backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet101', pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
@@ -71,6 +71,20 @@ def load_model(name, num_classes, pretrained=False, progress=True):
     elif name == 'rcnn_resnet18_fpn':
         backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet18', pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
+    elif name == 'rcnn_mobilenet_v2':
+        backbone = torchvision.models.mobilenet_v2(pretrained=True).features
+        backbone.out_channels = 1280
+        anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+        model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,
+                           box_roi_pool=roi_pooler)
+    elif name == 'rcnn_vgg19_bn':
+        backbone = torchvision.models.vgg19_bn(pretrained=True).features
+        backbone.out_channels = 512
+        anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+        model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,
+                           box_roi_pool=roi_pooler)
     else:
         raise NotImplementedError('Currently supported model names: rcnn_resnet50_fpn and rcnn_resnet101_fpn')
     return model

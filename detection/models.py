@@ -1,14 +1,17 @@
-import numpy as np
+import types
+
 from joblib import Parallel, delayed
-from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
+from torch import nn
+from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.models.detection.anchor_utils import AnchorGenerator
-from torchvision.models.detection.faster_rcnn import FasterRCNN, FastRCNNPredictor
+from torchvision.models.detection.faster_rcnn import FasterRCNN
 import torchvision.transforms.functional as F
+from torchvision.ops.misc import FrozenBatchNorm2d
 
-from detection import datasets, utils
+from detection import datasets
 
 
 class HOG:
@@ -58,19 +61,75 @@ class HOG:
         return fd
 
 
-def load_model(name, num_classes, pretrained=False, progress=True):
+def get_resnet_features(name, trainable_layers=3, norm_layer=FrozenBatchNorm2d, pretrained=True):
+    model = torchvision.models.resnet.__dict__[name](norm_layer=norm_layer, pretrained=pretrained)
+    if trainable_layers < 0 or trainable_layers > 5:
+        raise ValueError(f"Trainable layers should be in the range [0,5], got {trainable_layers}")
+    layers_to_train = ["layer4", "layer3", "layer2", "layer1", "conv1"][:trainable_layers]
+    if trainable_layers == 5:
+        layers_to_train.append("bn1")
+    for name, parameter in model.named_parameters():
+        if all([not name.startswith(layer) for layer in layers_to_train]):
+            parameter.requires_grad_(False)
+
+    def _forward_impl(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        return x
+
+    model._forward_impl = types.MethodType(_forward_impl, model)
+    return model
+
+
+def load_model(name, num_classes, trainable_layers=3, pretrained=True):
     if name == 'rcnn_resnet50_fpn':
-        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet50', pretrained=pretrained)
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet50',
+                                                                                   trainable_layers=trainable_layers,
+                                                                                   pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
     elif name == 'rcnn_resnet101_fpn':
-        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet101', pretrained=pretrained)
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet101',
+                                                                                   trainable_layers=trainable_layers,
+                                                                                   pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
     elif name == 'rcnn_resnet34_fpn':
-        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet34', pretrained=pretrained)
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet34',
+                                                                                   trainable_layers=trainable_layers,
+                                                                                   pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
     elif name == 'rcnn_resnet18_fpn':
-        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet18', pretrained=pretrained)
+        backbone = torchvision.models.detection.backbone_utils.resnet_fpn_backbone('resnet18',
+                                                                                   trainable_layers=trainable_layers,
+                                                                                   pretrained=pretrained)
         model = FasterRCNN(backbone, num_classes=num_classes)
+    elif name == 'rcnn_resnet18':
+        backbone = get_resnet_features('resnet18', trainable_layers=trainable_layers, pretrained=pretrained)
+        backbone.out_channels = 512
+        anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+        model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,
+                           box_roi_pool=roi_pooler)
+    elif name == 'rcnn_resnet50':
+        backbone = get_resnet_features('resnet50', trainable_layers=trainable_layers, pretrained=pretrained)
+        backbone.out_channels = 2048
+        anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+        model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,
+                           box_roi_pool=roi_pooler)
+    elif name == 'rcnn_resnet101':
+        backbone = get_resnet_features('resnet18', trainable_layers=trainable_layers, pretrained=pretrained)
+        backbone.out_channels = 2048
+        anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
+        roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
+        model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,
+                           box_roi_pool=roi_pooler)
     elif name == 'rcnn_mobilenet_v2':
         backbone = torchvision.models.mobilenet_v2(pretrained=True).features
         backbone.out_channels = 1280

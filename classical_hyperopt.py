@@ -1,13 +1,13 @@
 import argparse
+import cProfile
 import json
 import logging
-import os
+from time import time
 
 import cv2
 import numpy as np
-import plotly
+from optuna._callbacks import RetryFailedTrialCallback
 from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import SGDClassifier
 from sklearn.kernel_approximation import Nystroem
 from sklearn.decomposition import PCA
@@ -16,90 +16,79 @@ from sklearn.preprocessing import StandardScaler
 from detection import models, utils, datasets, evaluation
 from detection import trainingtools
 import optuna
-from optuna.visualization import plot_optimization_history, plot_contour, plot_parallel_coordinate
 
+MAX_RETRY = 2
 
 def get_args_parser(add_help=True):
     parser = argparse.ArgumentParser(description="Hyperparameter Optimisation for Classical Pipeline", add_help=add_help)
     parser.add_argument("--train-path", type=str, help="path to training dataset")
     parser.add_argument("--test-path", type=str, help="path to test dataset")
     parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
+    parser.add_argument("--db-login", type=str, help="path to database login file")
     parser.add_argument("--val-split", "--tr", default=0.2, type=float,
                         help="proportion of training dataset to use for validation")
     parser.add_argument("--iou-thresh", default=0.5, type=float, help="IoU threshold for evaluation")
     parser.add_argument("--log-file", "--lf", default=None, type=str,
                         help="path to file for writing logs. If omitted, writes to stdout")
     parser.add_argument("--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
-    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
 
     # Hard negative mining parameters
     parser.add_argument("--neg-per-img", default=50, type=int, help="how many hard negatives to mine from each image")
 
-    parser.add_argument("--n-jobs", default=1, type=int, help="number of optimization jobs to run in parallel")
-    parser.add_argument("--n-trials", default=5, type=int, help="number of optimization iterations")
+    parser.add_argument("--profile", action="store_true", help="run with profile statistics")
+
+    parser.add_argument("--n-cpus", type=int, help="number of cpus to use per trial")
+    parser.add_argument("--n-trials", type=int, help="number of optimization trials")
+    parser.add_argument("--study-name", type=str, help="name of optimization study")
     return parser
 
 
 class Objective(object):
-    def __init__(self, train_dataset, val_dataset, neg_per_img, n_jobs):
+    def __init__(self, train_dataset, val_dataset, neg_per_img, iou_thresh, n_cpus):
         # Hold this implementation specific arguments as the fields of the class.
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.neg_per_img = neg_per_img
-        self.n_jobs = n_jobs
+        self.iou_thresh = iou_thresh
+        self.n_cpus = n_cpus
 
     def __call__(self, trial):
         # Create feature extractor
-        orientations = 9
-        ppc = trial.suggest_int('pixels per cell', 8, 16)
-        cpb = trial.suggest_int('cells per block', 2, 3)
         block_norm = trial.suggest_categorical('block norm', ['L1', 'L1-sqrt', 'L2', 'L2-Hys'])
-        gamma_corr = trial.suggest_categorical('gamma correction', [True, False])
-        hog_inp_dim = 64  # trial.suggest_int('HOG input size', 64, 128, log=True)
-        feature_extractor = models.HOG(orientations=orientations, pixels_per_cell=(ppc, ppc), cells_per_block=(cpb, cpb),
-                                       block_norm=block_norm, gamma_corr=gamma_corr, resize_to=(hog_inp_dim, hog_inp_dim))
+        hog_inp_dim = trial.suggest_int('HOG input size', 32, 128, log=True)
+        feature_extractor = models.HOG(orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3),
+                                       block_norm=block_norm, gamma_corr=True, resize_to=(hog_inp_dim, hog_inp_dim))
 
         # Extract features
-        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=self.n_jobs)
+        descriptors, labels = feature_extractor.extract_all(self.train_dataset, cpus=self.n_cpus)
 
         # Add one background GT for SVM
         descriptors.append(np.zeros_like(descriptors[0]))
         labels.append(0)
         print("Descriptors:", len(descriptors), descriptors[0].shape)
-        print(orientations, ppc, cpb, hog_inp_dim)
 
         # Train SVM
-        classifier = trial.suggest_categorical('classifier', ['SGD+Nystroem'])
-        pca_components = min(trial.suggest_int('PCA components', 10, 30, log=True),
+        pca_components = min(trial.suggest_int('PCA components', 10, 500, log=True),
                              descriptors[0].shape[0],
                              len(descriptors))
-        class_weight = trial.suggest_categorical('class weight', [None, 'balanced'])
-        if classifier == 'SGD+Nystroem':
-            gamma = trial.suggest_float('RBF gamma', 1e-10, 1)
-            n_components = trial.suggest_int('Nystroem components', 10, 80, log=True)
-            alpha = trial.suggest_loguniform('SGD alpha', 1e-10, 1)
-            max_iter = trial.suggest_int('max iter', 100, 100000, log=True)
-            clf = Pipeline(steps=[('scaler', StandardScaler()),
-                                  ('pca', PCA(n_components=pca_components)),
-                                  ('feature_map', Nystroem(gamma=gamma, n_components=n_components)),
-                                  ('model', SGDClassifier(alpha=alpha, class_weight=class_weight,
-                                                          fit_intercept=False, max_iter=max_iter))])
-        elif classifier == 'RandomForest':
-            n_estimators = trial.suggest_int('RF estimators', 10, 500, log=True)
-            criterion = trial.suggest_categorical('RF criterion', ['gini', 'entropy'])
-            max_features = trial.suggest_categorical('RF max features', [None, 'sqrt', 'log2'])
-            clf = Pipeline(steps=[('scaler', StandardScaler()),
-                                  ('pca', PCA(n_components=pca_components)),
-                                  ('model', RandomForestClassifier(n_estimators=n_estimators, class_weight=class_weight,
-                                                                   criterion=criterion, max_features=max_features))])
-
+        class_weight = trial.suggest_categorical('class_weight', [None, 'balanced'])
+        gamma = trial.suggest_float('RBF gamma', 1e-10, 1)
+        n_components = trial.suggest_int('Nystroem components', 10, 800, log=True)
+        alpha = trial.suggest_loguniform('SGD alpha', 1e-10, 1)
+        clf = Pipeline(steps=[('scaler', StandardScaler()),
+                              ('pca', PCA(n_components=pca_components)),
+                              ('feature_map', Nystroem(gamma=gamma, n_components=n_components)),
+                              ('model', SGDClassifier(alpha=alpha, class_weight=class_weight,
+                                                      fit_intercept=False, max_iter=100000))])
+        start = time()
         clf.fit(descriptors, labels)
+        fit_time = time() - start
+        logging.info(f"Fit took {fit_time:.1f} seconds")
+        trial.set_user_attr("fit_time", fit_time)
 
-        perform_hard_negative_mining = trial.suggest_categorical('hard negative mining', [True, False])
-
-        if perform_hard_negative_mining:
-            negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
-                                                                 max_per_img=self.neg_per_img, cpus=self.n_jobs)
+        if self.neg_per_img > 0:
+            negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, self.train_dataset,
+                                                                 max_per_img=self.neg_per_img, cpus=self.n_cpus)
 
             # Add hard negatives to training samples
             descriptors.extend(negative_samples)
@@ -112,38 +101,49 @@ class Objective(object):
             clf.fit(descriptors, labels)
 
         # Evaluate
-        result = trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, dataset=val_dataset,
-                                                   plot_pc=False, cpus=self.n_jobs)
+        result = trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, dataset=self.val_dataset,
+                                                   plot_pc=False, cpus=self.n_cpus)
+        logging.info("Evaluation done")
 
         return -result['mAP']
 
 
-if __name__ == '__main__':
-    # Parse arguments
-    args = get_args_parser().parse_args()
+def main(args):
     utils.initialise_logging(args)
     utils.make_deterministic(42)
 
+    cv2.setUseOptimized(True)
+    cv2.setNumThreads(1)
+
     with open(args.class_file, "r") as f:
         classes = json.load(f)
-    num_classes = len(classes) + 1
 
     # Load datasets
     logging.info("Loading dataset...")
     train_dataset, val_dataset = datasets.load_train_val(name='FathomNet', train_path=args.train_path, classes=classes,
                                                          val_split=args.val_split)
 
-    cv2.setUseOptimized(True)
-    cv2.setNumThreads(1)
+    objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.iou_thresh, args.n_cpus)
 
-    objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.n_jobs)
-    study = optuna.create_study()
+    with open(args.db_login, "r") as f:
+        login = json.load(f)
+
+    storage = optuna.storages.RDBStorage(
+        "postgresql://" + login["username"] + ":" + login["password"] + "@" + login["host"] + "/postgres",
+        heartbeat_interval=1,
+        failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
+    )
+    study = optuna.create_study(
+        storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,
+        sampler=optuna.samplers.TPESampler(multivariate=True, group=True, constant_liar=True),
+    )
     study.optimize(objective, n_trials=args.n_trials)
-    best_params = study.best_params
-    print(best_params)
-    fig = plot_optimization_history(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'optimization_history.html'))
-    fig = plot_contour(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'contour.html'))
-    fig = plot_parallel_coordinate(study)
-    plotly.offline.plot(fig, filename=os.path.join(args.output_dir, 'parallel_coordinate.html'))
+
+
+if __name__ == '__main__':
+    # Parse arguments
+    parsed_args = get_args_parser().parse_args()
+    if parsed_args.profile:
+        cProfile.run('main(parsed_args)', 'restats')
+    else:
+        main(parsed_args)

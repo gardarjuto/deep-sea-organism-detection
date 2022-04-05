@@ -3,11 +3,13 @@ import json
 import numpy as np
 import torch
 import optuna
+from optuna._callbacks import RetryFailedTrialCallback
 from torch.utils.data import DataLoader
 from detection import models, utils, datasets
 from detection import trainingtools
 import logging
 
+MAX_RETRY = 2
 MILESTONES = [16, 22]
 GAMMA = 0.1
 
@@ -135,7 +137,8 @@ def main(args):
 
     storage = optuna.storages.RDBStorage(
         "postgresql://" + login["username"] + ":" + login["password"] + "@" + login["host"] + "/postgres",
-        heartbeat_interval=1
+        heartbeat_interval=1,
+        failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
     )
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,

@@ -125,7 +125,7 @@ def load_model(name, num_classes, trainable_layers=3, pretrained=True):
                            box_roi_pool=roi_pooler)
     elif name == 'rcnn_resnet101':
         backbone = get_resnet_features('resnet18', trainable_layers=trainable_layers, pretrained=pretrained)
-        backbone.out_channels = 2048
+        backbone.out_channels = 512
         anchor_generator = AnchorGenerator(sizes=((32, 64, 128, 256, 512),), aspect_ratios=((0.5, 1.0, 2.0),))
         roi_pooler = torchvision.ops.MultiScaleRoIAlign(featmap_names=['0'], output_size=7, sampling_ratio=2)
         model = FasterRCNN(backbone, num_classes=num_classes, rpn_anchor_generator=anchor_generator,

@@ -139,7 +139,7 @@ def main(args):
     )
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=args.seed, multivariate=True, group=True, constant_liar=True),
+        sampler=optuna.samplers.TPESampler(multivariate=True, group=True, constant_liar=True),
         pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=args.epochs, reduction_factor=3)
     )
     study.optimize(objective, n_trials=args.n_trials)

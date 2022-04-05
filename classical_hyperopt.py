@@ -105,7 +105,7 @@ class Objective(object):
                                                    plot_pc=False, cpus=self.n_cpus)
         logging.info("Evaluation done")
 
-        return -result['mAP']
+        return result['mAP']
 
 
 def main(args):

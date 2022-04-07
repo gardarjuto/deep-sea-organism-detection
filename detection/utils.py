@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.cuda
 import torch.distributed as dist
-from matplotlib import pyplot as plt
+from matplotlib import pyplot as plt, patches
 from matplotlib.colors import SymLogNorm
 from skimage.util import view_as_windows
 
@@ -153,3 +153,46 @@ def make_deterministic(seed):
     torch.backends.cudnn.deterministic = True
     cv2.setRNGSeed(0)
 
+
+def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None):
+    fig, ax = plt.subplots(figsize=(10, 10))
+    if isinstance(image, torch.Tensor):
+        ax.imshow(image.permute(1, 2, 0))
+    else:
+        ax.imshow(image)
+    if predictions:
+        for box, label in zip(predictions['boxes'], predictions['labels']):
+            # Create a Rectangle patch
+            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='r',
+                                     facecolor='none')
+            # Add the patch to the Axes
+            ax.add_patch(rect)
+            label = label.item()
+            if name_mapping:
+                label = name_mapping(label)
+            plt.text(box[0] + 10, box[3] + 10, label, size=10,
+                     ha="left", va="top",
+                     bbox=dict(boxstyle="square",
+                               ec='red',
+                               fc='red',
+                               alpha=0.2
+                               )
+                     )
+    if ground_truths:
+        for box, label in zip(ground_truths['boxes'], ground_truths['labels']):
+            # Create a Rectangle patch
+            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='y',
+                                     facecolor='none')
+            # Add the patch to the Axes
+            ax.add_patch(rect)
+            label = label.item()
+            if name_mapping:
+                label = name_mapping(label)
+            plt.text(box[0] + 10, box[3] + 10, label, size=10,
+                     ha="left", va="top",
+                     bbox=dict(boxstyle="square",
+                               ec='yellow',
+                               fc='yellow',
+                               alpha=0.2
+                               )
+                     )

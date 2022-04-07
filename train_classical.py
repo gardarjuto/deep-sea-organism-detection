@@ -105,17 +105,19 @@ def main(args):
 
     # Add one background GT for SVM
     logging.info(f"N={len(descriptors)},D={len(descriptors[0])}")
-    logging.info(f"Min={min([descriptor.min() for descriptor in descriptors])}, Max={max([descriptor.max() for descriptor in descriptors])}")
+    logging.info(
+        f"Min={min([descriptor.min() for descriptor in descriptors])}, Max={max([descriptor.max() for descriptor in descriptors])}")
     descriptors.append(descriptors[0])
     labels.append(0)
 
     # Train SVM
     logging.info("Training classifier on feature descriptors")
-    clf = trainingtools.train_svm(descriptors, labels, num_classes, pca_components=args.pca_components,
-                                  feature_map_gamma=args.feature_map_gamma,
-                                  feature_map_components=args.feature_map_components,
-                                  sgd_alpha=args.sgd_alpha, class_weight=args.class_weight,
-                                  fit_intercept=args.fit_intercept, max_iter=args.max_iter)
+    clf = trainingtools.train_classifier(classifier_name, descriptors, labels, num_classes,
+                                         pca_components=args.pca_components,
+                                         feature_map_gamma=args.feature_map_gamma,
+                                         feature_map_components=args.feature_map_components,
+                                         sgd_alpha=args.sgd_alpha, class_weight=args.class_weight,
+                                         fit_intercept=args.fit_intercept, max_iter=args.max_iter)
 
     cv2.setUseOptimized(True)
     cv2.setNumThreads(1)
@@ -137,7 +139,8 @@ def main(args):
         # Add hard negatives to training samples
         descriptors.extend(negative_samples)
         labels.extend([0] * len(negative_samples))
-        logging.info(f"Added {len(negative_samples)} negative samples to the previous {len(descriptors) - len(negative_samples)} total")
+        logging.info(
+            f"Added {len(negative_samples)} negative samples to the previous {len(descriptors) - len(negative_samples)} total")
 
         # Save descriptors
         with open(os.path.join(args.output_dir, f"saved_descriptors_SGDNystroem_epoch_{epoch}.pickle"), "wb") as f:

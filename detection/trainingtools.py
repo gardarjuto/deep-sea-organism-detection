@@ -8,14 +8,11 @@ import numpy as np
 import torch
 from PIL import Image
 from joblib import delayed, Parallel
-from matplotlib import patches
 from skimage.transform import pyramid_gaussian
-from sklearn.pipeline import make_pipeline, Pipeline
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDClassifier
-from sklearn.neural_network import MLPClassifier
 from sklearn.kernel_approximation import Nystroem
-from sklearn.metrics import confusion_matrix
 from sklearn.decomposition import PCA
 
 from torchvision.ops import box_iou
@@ -150,7 +147,7 @@ def train_svm(descriptors, labels, num_classes, pca_components=200, feature_map_
     return clf
 
 
-def selective_search_roi(image, resize_height=300, quality=False):
+def selective_search_roi(image, resize_height=250, quality=False):
     scale_factor = resize_height / image.shape[0]
     resize_width = int(image.shape[1] * scale_factor)
     image = cv2.resize(image, (resize_width, resize_height))
@@ -166,25 +163,10 @@ def selective_search_roi(image, resize_height=300, quality=False):
     return bboxes
 
 
-def get_detections_ss(svm, feature_extractor, image, resize_height=300):
-    detections = {cl: [] for cl in svm.classes_}
-    confidence = {cl: [] for cl in svm.classes_}
-    n_detect = 0
-
-    image = np.transpose(image.numpy(), (1, 2, 0))
-
+def get_detections_ss(image, resize_height=250):
     bboxes = selective_search_roi(image, resize_height=resize_height)
     bboxes = bboxes[(bboxes[:, 2] > 3) & (bboxes[:, 3] > 3)]
-    total = len(bboxes)
-
-    for (x, y, w, h) in bboxes:
-        window = image[y:y + h, x:x + w]
-        pred, conf = get_classification(svm, feature_extractor, window)
-        if pred > 0:
-            detections[pred[0]].append([x, y, x + w, y + h])
-            confidence[pred[0]].append(conf)
-            n_detect += 1
-    return detections, confidence
+    return bboxes
 
 
 def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
@@ -223,50 +205,34 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
         # Move the the next scale
         scale += 1
 
-        if visualise:
-            fig, ax = plt.subplots()
-            plt.imshow(im_scaled)
-
-            for cl in detections:
-                for i, ((x0, y0, x1, y1), conf) in enumerate(zip(detections[cl], confidence[cl])):
-                    # add bounding boxes to the image
-                    box = patches.Rectangle(
-                        (x0, y0), x1 - x0, y1 - y0, edgecolor="red", facecolor="none"
-                    )
-
-                    ax.add_patch(box)
-
-                    rx, ry = box.get_xy()
-                    cx = rx + box.get_width() / 2.0
-                    cy = ry + box.get_height() / 8.0
-                    l = ax.annotate(
-                        f"{cl}, {conf:.1f}",
-                        (cx, cy),
-                        fontsize=8,
-                        fontweight="bold",
-                        color="white",
-                        ha='center',
-                        va='center'
-                    )
-                    l.set_bbox(
-                        dict(facecolor='red', alpha=0.5, edgecolor='red')
-                    )
-
-            plt.axis('off')
-            plt.show()
-
     return detections, confidence
 
 
-def get_classification(clf, feature_extractor, image):
-    fd = feature_extractor.extract(image)
-    pred = clf.predict(fd.reshape(1, -1))
-    conf = clf.decision_function(fd.reshape(1, -1)).max()
+def get_classification(clf, sample):
+    pred = clf.predict(sample)
+    if hasattr(clf, 'decision_function'):
+        conf = clf.decision_function(sample).max()
+    else:
+        conf = np.random.random()
     return pred, conf
 
 
-def get_predictions(clf, feature_extractor, image):
-    detections, conf_scores = get_detections_ss(clf, feature_extractor, image)
+def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=None):
+    image = np.transpose(image.numpy(), (1, 2, 0))
+    bboxes = get_detections_ss(image, resize_height=ss_height)
+
+    detections = {cl: [] for cl in obj_clf.classes_}
+    confidence = {cl: [] for cl in obj_clf.classes_}
+    for (x, y, w, h) in bboxes:
+        window = image[y:y + h, x:x + w]
+        fd = feature_extractor.extract(window).reshape(1, -1)
+        if bg_clf and bg_clf.predict(fd) == 0:
+            continue
+        pred, conf = get_classification(obj_clf, fd)
+        if pred > 0:
+            detections[pred[0]].append([x, y, x + w, y + h])
+            confidence[pred[0]].append(conf)
+
     boxes = []
     labels = []
     scores = []
@@ -274,7 +240,7 @@ def get_predictions(clf, feature_extractor, image):
         if not detections[cls]:
             continue
         filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
-                                                                           np.array(conf_scores[cls]))
+                                                                           np.array(confidence[cls]))
         boxes.extend(filtered_boxes)
         labels.extend([cls for _ in range(len(filtered_boxes))])
         scores.extend(filtered_confidence)
@@ -283,13 +249,14 @@ def get_predictions(clf, feature_extractor, image):
     return predictions
 
 
-def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=True,
-                        cpus=1):
+def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, log_every=None,
+                        output_dir=None, plot_pc=True, cpus=1):
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
 
     prediction_list = Parallel(n_jobs=cpus)(
-        delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, clf, feature_extractor, image)
+        delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, clf, feature_extractor, image,
+                                                                          ss_height)
         for image, targets in dataset)
     for targets, predictions in prediction_list:
         evaluator.update(targets, predictions)
@@ -304,7 +271,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, log_eve
     return res
 
 
-def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=50, cpus=1):
+def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=None, cpus=1):
     hard_negatives = Parallel(n_jobs=cpus)(
         delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
         for img, targets in dataset)
@@ -312,40 +279,71 @@ def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per
     return [fd for sublist in hard_negatives for fd in sublist]
 
 
-def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=50):
-    hard_negatives = []
-    detections, conf_scores = get_detections_ss(clf, feature_extractor, image)
-    boxes = []
-    labels = []
-    scores = []
-    for cls in detections:
-        if not detections[cls]:
-            continue
-        filtered_boxes, filtered_confidence = utils.non_maxima_suppression(np.array(detections[cls]),
-                                                                           np.array(conf_scores[cls]))
-        boxes.extend(filtered_boxes)
-        labels.extend([cls for _ in range(len(filtered_boxes))])
-        scores.extend(filtered_confidence)
-
-    pred_boxes = torch.tensor(np.array(boxes))
-    pred_labels = torch.tensor(labels)
-    pred_scores = torch.tensor(scores)
+def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=None):
+    predictions = get_predictions(clf, feature_extractor, image)
+    pred_boxes = predictions['boxes']
+    pred_labels = predictions['labels']
+    pred_scores = predictions['scores']
 
     if targets['boxes'].numel() == 0:
         hn, hn_scores = pred_boxes[pred_labels > 0], pred_scores[pred_labels > 0]
     elif pred_boxes.numel() == 0:
-        hn, hn_scores = torch.empty(0), torch.empty(0)
+        hn, hn_scores = torch.empty((0, 4)), torch.empty(0)
     else:
         ious = box_iou(targets['boxes'], pred_boxes)
         negative_idx = (ious.max(dim=0).values < iou_thresh) & (pred_labels > 0)
         hn, hn_scores = pred_boxes[negative_idx], pred_scores[negative_idx]
 
-    n = min(limit, len(hn_scores))
-    top_n_idx = np.argpartition(hn_scores, -n)[-n:]
+    hn_filtered = hn
+    if limit:
+        n = min(limit, len(hn_scores))
+        top_n_idx = np.argpartition(hn_scores, -n)[-n:]
+        hn_filtered = hn[top_n_idx]
 
-    for box in hn[top_n_idx]:
+    hard_negatives = []
+    for box in hn_filtered:
         x0, y0, x1, y1 = box.int()
         cropped_img = F.crop(image, y0, x0, y1 - y0, x1 - x0)
         fd = feature_extractor.extract(cropped_img)
         hard_negatives.append(fd)
     return hard_negatives
+
+
+def train_classifier(classifier_name, X, y, num_classes, kwargs):
+    if len(np.unique(y)) != num_classes:
+        raise RuntimeError('Label vector missing some classes')
+    if classifier_name == 'SGD+Nystroem':
+        clf = Pipeline(steps=[('scaler', StandardScaler()),
+                              ('pca', PCA(n_components=kwargs['pca_components'])),
+                              ('feature_map', Nystroem(gamma=kwargs['nystroem_gamma'],
+                                                       n_components=kwargs['nystroem_components'])),
+                              ('model', SGDClassifier(alpha=kwargs['sgd_alpha'], class_weight=kwargs['class_weight'],
+                                                      fit_intercept=kwargs['fit_intercept'],
+                                                      max_iter=kwargs['max_iter']))])
+    else:
+        raise ValueError('Classifier name not supported')
+    clf.fit(X, y)
+    return clf
+
+
+def evaluate_two_stage(bg_clf, obj_clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None,
+                       plot_pc=False, cpus=1):
+    evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
+    logging.info(f"Object classifier has classes {obj_clf.classes_}")
+
+    prediction_list = Parallel(n_jobs=cpus)(
+        delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, obj_clf, feature_extractor, image,
+                                                                          ss_height, bg_clf)
+        for image, targets in dataset)
+
+    for targets, predictions in prediction_list:
+        evaluator.update(targets, predictions)
+
+    res = evaluator.summarise(method="101")
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
+    if plot_pc:
+        axes = evaluator.plot_precision_recall(interpolate=True)
+        plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
+    return res

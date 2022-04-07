@@ -29,12 +29,6 @@ class HOG:
         descriptors = []
         labels = []
         if isinstance(dataset, datasets.FathomNetDataset):
-            def process_func(img, box, label):
-                x0, y0, x1, y1 = box.int()
-                cropped = F.crop(img, y0, x0, y1 - y0, x1 - x0)
-                fd = self.extract(cropped)
-                return fd, label.item()
-
             res = [pair for pairs in Parallel(n_jobs=cpus)(delayed(self.extract_from_sample)(img, targets)
                                                            for img, targets in dataset) for pair in pairs]
         elif isinstance(dataset, datasets.FathomNetCroppedDataset):

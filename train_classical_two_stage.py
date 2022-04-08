@@ -45,7 +45,7 @@ def get_args_parser(add_help=True):
     parser.add_argument("--C", default=1.0, type=float, help="C parameter for SVM")
     parser.add_argument("--loss", default="hinge", type=str, help="loss type for SVM")
     parser.add_argument("--classifier-name", type=str, help="Name of classifier to use")
-    parser.add_argument("--pca-components", default=100, type=str, help="Number of PCA components")
+    parser.add_argument("--pca-components", default=100, type=int, help="Number of PCA components")
     parser.add_argument("--nystroem-components", default=500, type=int, help="Number of Nystroem components")
     parser.add_argument("--nystroem-gamma", type=float, help="Nystroem gamma value")
     parser.add_argument("--sgd-alpha", type=float, help="SGD alpha value")

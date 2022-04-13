@@ -154,14 +154,16 @@ def make_deterministic(seed):
     cv2.setRNGSeed(0)
 
 
-def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None):
+def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None, conf_thresh=None):
     fig, ax = plt.subplots(figsize=(10, 10))
     if isinstance(image, torch.Tensor):
         ax.imshow(image.permute(1, 2, 0))
     else:
         ax.imshow(image)
     if predictions:
-        for box, label in zip(predictions['boxes'], predictions['labels']):
+        for box, label, score in zip(predictions['boxes'], predictions['labels'], predictions['scores']):
+            if conf_thresh and score < conf_thresh:
+                continue
             # Create a Rectangle patch
             rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='r',
                                      facecolor='none')

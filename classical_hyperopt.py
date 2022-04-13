@@ -5,7 +5,7 @@ import logging
 from time import time
 
 import cv2
-import numpy as np
+import sklearn
 from optuna._callbacks import RetryFailedTrialCallback
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import SGDClassifier
@@ -44,66 +44,39 @@ def get_args_parser(add_help=True):
 
 
 class Objective(object):
-    def __init__(self, train_dataset, val_dataset, neg_per_img, iou_thresh, n_cpus):
+    def __init__(self, train_dataset, val_dataset, neg_per_img, iou_thresh, n_cpus, feature_extractor, descriptors,
+                 labels):
         # Hold this implementation specific arguments as the fields of the class.
         self.train_dataset = train_dataset
         self.val_dataset = val_dataset
         self.neg_per_img = neg_per_img
         self.iou_thresh = iou_thresh
         self.n_cpus = n_cpus
+        self.feature_extractor = feature_extractor
+        self.descriptors = descriptors
+        self.labels = labels
 
     def __call__(self, trial):
-        # Create feature extractor
-        block_norm = trial.suggest_categorical('block norm', ['L1', 'L1-sqrt', 'L2', 'L2-Hys'])
-        hog_inp_dim = trial.suggest_int('HOG input size', 32, 128, log=True)
-        feature_extractor = models.HOG(orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3),
-                                       block_norm=block_norm, gamma_corr=True, resize_to=(hog_inp_dim, hog_inp_dim))
-
-        # Extract features
-        descriptors, labels = feature_extractor.extract_all(self.train_dataset, cpus=self.n_cpus)
-
-        # Add one background GT for SVM
-        descriptors.append(np.zeros_like(descriptors[0]))
-        labels.append(0)
-        print("Descriptors:", len(descriptors), descriptors[0].shape)
-
         # Train SVM
-        pca_components = min(trial.suggest_int('PCA components', 10, 500, log=True),
-                             descriptors[0].shape[0],
-                             len(descriptors))
+        pca_components = trial.suggest_int('PCA components', 10, 200, log=True)
         class_weight = trial.suggest_categorical('class_weight', [None, 'balanced'])
-        gamma = trial.suggest_float('RBF gamma', 1e-10, 1)
+        gamma = trial.suggest_float('RBF gamma', 1e-10, 1, log=True)
         n_components = trial.suggest_int('Nystroem components', 10, 800, log=True)
-        alpha = trial.suggest_loguniform('SGD alpha', 1e-10, 1)
+        alpha = trial.suggest_float('SGD alpha', 1e-10, 1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
                               ('pca', PCA(n_components=pca_components)),
                               ('feature_map', Nystroem(gamma=gamma, n_components=n_components)),
                               ('model', SGDClassifier(alpha=alpha, class_weight=class_weight,
                                                       fit_intercept=False, max_iter=100000))])
         start = time()
-        clf.fit(descriptors, labels)
+        clf.fit(self.descriptors, self.labels)
         fit_time = time() - start
         logging.info(f"Fit took {fit_time:.1f} seconds")
         trial.set_user_attr("fit_time", fit_time)
 
-        if self.neg_per_img > 0:
-            negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, self.train_dataset,
-                                                                 max_per_img=self.neg_per_img, cpus=self.n_cpus)
-
-            # Add hard negatives to training samples
-            descriptors.extend(negative_samples)
-            labels.extend([0] * len(negative_samples))
-            logging.info(
-                f"Added {len(negative_samples)} negative samples to the previous {len(descriptors) - len(negative_samples)} total")
-
-            # Train SVM
-            logging.info("Training classifier on feature descriptors")
-            clf.fit(descriptors, labels)
-
         # Evaluate
-        result = trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor, dataset=self.val_dataset,
-                                                   plot_pc=False, cpus=self.n_cpus)
-        logging.info("Evaluation done")
+        result = trainingtools.evaluate_classifier(clf, feature_extractor=self.feature_extractor,
+                                                   dataset=self.val_dataset, plot_pc=False, cpus=self.n_cpus)
 
         return result['mAP']
 
@@ -123,7 +96,26 @@ def main(args):
     train_dataset, val_dataset = datasets.load_train_val(name='FathomNet', train_path=args.train_path, classes=classes,
                                                          val_split=args.val_split)
 
-    objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.iou_thresh, args.n_cpus)
+    # Create feature extractor
+    feature_extractor = models.HOG(orientations=9, pixels_per_cell=(8, 8), cells_per_block=(2, 2),
+                                   block_norm='L2-Hys', gamma_corr=True, resize_to=(128, 128))
+
+    # Extract features
+    descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus)
+
+    clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
+    clf.fit(descriptors[:2], [0, 1])
+
+    # Apply negative mining
+    logging.info("Performing hard negative mining")
+    negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
+                                                         iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
+                                                         cpus=args.cpus)
+    descriptors += negative_samples
+    labels += [0 for _ in negative_samples]
+
+    objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.iou_thresh, args.n_cpus, feature_extractor,
+                          descriptors, labels)
 
     with open(args.db_login, "r") as f:
         login = json.load(f)

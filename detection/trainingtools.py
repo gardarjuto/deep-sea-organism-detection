@@ -225,11 +225,13 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
     confidence = {cl: [] for cl in obj_clf.classes_}
     for (x, y, w, h) in bboxes:
         window = image[y:y + h, x:x + w]
+            
         fd = feature_extractor.extract(window).reshape(1, -1)
+
         if bg_clf and bg_clf.predict(fd) == 0:
             continue
         pred, conf = get_classification(obj_clf, fd)
-        if pred > 0:
+        if pred[0] > 0 and conf > 0:
             detections[pred[0]].append([x, y, x + w, y + h])
             confidence[pred[0]].append(conf)
 
@@ -249,8 +251,8 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
     return predictions
 
 
-def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, log_every=None,
-                        output_dir=None, plot_pc=True, cpus=1):
+def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None, plot_pc=False,
+                        cpus=1):
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
 

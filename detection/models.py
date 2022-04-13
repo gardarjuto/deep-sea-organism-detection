@@ -4,25 +4,25 @@ from joblib import Parallel, delayed
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
-from torch import nn
-from torchvision.models._utils import IntermediateLayerGetter
 from torchvision.models.detection.anchor_utils import AnchorGenerator
 from torchvision.models.detection.faster_rcnn import FasterRCNN
 import torchvision.transforms.functional as F
 from torchvision.ops.misc import FrozenBatchNorm2d
+import numpy as np
 
 from detection import datasets
 
 
 class HOG:
     def __init__(self, orientations=9, pixels_per_cell=(8, 8), cells_per_block=(3, 3), block_norm='L2-Hys',
-                 gamma_corr=False, resize_to=(64, 64)):
+                 gamma_corr=False, resize_to=(64, 64), center_crop=False):
         self.orientations = orientations
         self.pixels_per_cell = pixels_per_cell
         self.cells_per_block = cells_per_block
         self.block_norm = block_norm
         self.gamma_corr = gamma_corr
         self.resize_to = resize_to
+        self.center_crop = center_crop
 
     def extract_all(self, dataset, cpus=1):
         """Extracts features from all samples from dataset"""
@@ -44,7 +44,7 @@ class HOG:
         for box, label in zip(targets['boxes'], targets['labels']):
             x0, y0, x1, y1 = box.int()
             cropped = F.crop(image, y0, x0, y1 - y0, x1 - x0)
-            fd = self.extract(cropped)
+            fd = self.extract(cropped.permute((1, 2, 0)))
             res.append((fd, label.item()))
         return res
 
@@ -52,6 +52,12 @@ class HOG:
         im_resized = resize(image, self.resize_to, anti_aliasing=True)
         fd = hog(im_resized, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
                  transform_sqrt=self.gamma_corr, multichannel=True)
+        if self.center_crop:
+            h, w, _ = image.shape
+            im_resized2 = resize(image[h // 6:2 * h // 3, w // 6:2 * w // 3], self.resize_to, anti_aliasing=True)
+            fd2 = hog(im_resized2, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
+                      transform_sqrt=self.gamma_corr, multichannel=True)
+            fd = np.concatenate([fd, fd2])
         return fd
 
 

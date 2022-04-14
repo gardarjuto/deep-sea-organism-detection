@@ -115,6 +115,7 @@ def main(args):
                                                          cpus=args.n_cpus)
     descriptors += negative_samples
     labels += [0 for _ in negative_samples]
+    logging.info(f"Added {len(negative_samples)} negatives to the {len(descriptors) - len(negative_samples)} positives")
 
     objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.iou_thresh, args.n_cpus, feature_extractor,
                           descriptors, labels)

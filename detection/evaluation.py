@@ -93,7 +93,8 @@ class FathomNetEvaluator:
             else:
                 raise NotImplementedError("Only supports methods '101' and 'all_points'")
             res[self.dataset.get_class_name(cls)] = AP
-        res['mAP'] = np.nanmean(list(val for val in res.values() if not isinstance(val, ZeroDivisionError)))
+        res['mAP'] = np.mean(list(val if not isinstance(val, ZeroDivisionError) and np.isfinite(val) else 0.0
+                                  for val in res.values()))
         return res
 
     def plot_precision_recall(self, interpolate=True):

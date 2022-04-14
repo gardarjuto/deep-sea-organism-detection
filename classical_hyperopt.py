@@ -111,7 +111,7 @@ def main(args):
     logging.info("Performing hard negative mining")
     negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
                                                          iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
-                                                         cpus=args.cpus)
+                                                         cpus=args.n_cpus)
     descriptors += negative_samples
     labels += [0 for _ in negative_samples]
 

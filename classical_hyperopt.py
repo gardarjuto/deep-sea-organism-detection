@@ -5,6 +5,7 @@ import logging
 from time import time
 
 import cv2
+import numpy as np
 import sklearn
 from optuna._callbacks import RetryFailedTrialCallback
 from sklearn.pipeline import Pipeline
@@ -79,7 +80,7 @@ class Objective(object):
         result = trainingtools.evaluate_classifier(clf, feature_extractor=self.feature_extractor,
                                                    dataset=self.val_dataset, plot_pc=False, cpus=self.n_cpus)
 
-        return result['mAP']
+        return result['mAP'] if not np.isnan(result['mAP']) else 0.0
 
 
 def main(args):

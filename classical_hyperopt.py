@@ -59,14 +59,15 @@ class Objective(object):
     def __call__(self, trial):
         # Train SVM
         pca_components = trial.suggest_int('PCA components', 10, 200, log=True)
-        class_weight = trial.suggest_categorical('class_weight', [None, 'balanced'])
+        class_weight = trial.suggest_categorical('class_weight', ['None', 'balanced'])
         gamma = trial.suggest_float('RBF gamma', 1e-10, 1, log=True)
         n_components = trial.suggest_int('Nystroem components', 10, 800, log=True)
         alpha = trial.suggest_float('SGD alpha', 1e-10, 1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
                               ('pca', PCA(n_components=pca_components)),
                               ('feature_map', Nystroem(gamma=gamma, n_components=n_components)),
-                              ('model', SGDClassifier(alpha=alpha, class_weight=class_weight,
+                              ('model', SGDClassifier(alpha=alpha,
+                                                      class_weight=class_weight if class_weight != 'None' else None,
                                                       fit_intercept=False, max_iter=100000))])
         start = time()
         clf.fit(self.descriptors, self.labels)

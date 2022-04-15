@@ -2,6 +2,8 @@ import argparse
 import cProfile
 import json
 import logging
+import os
+import pickle
 from time import time
 
 import cv2
@@ -34,24 +36,22 @@ def get_args_parser(add_help=True):
     parser.add_argument("--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
 
     # Hard negative mining parameters
-    parser.add_argument("--neg-per-img", default=50, type=int, help="how many hard negatives to mine from each image")
+    parser.add_argument("--neg-per-img", default=None, type=int, help="how many hard negatives to mine from each image")
 
     parser.add_argument("--profile", action="store_true", help="run with profile statistics")
 
     parser.add_argument("--n-cpus", type=int, help="number of cpus to use per trial")
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
     parser.add_argument("--study-name", type=str, help="name of optimization study")
+
+    parser.add_argument("--cached-path", type=str, help="path to cached descriptors and labels")
     return parser
 
 
 class Objective(object):
-    def __init__(self, train_dataset, val_dataset, neg_per_img, iou_thresh, n_cpus, feature_extractor, descriptors,
-                 labels):
+    def __init__(self, val_dataset, n_cpus, feature_extractor, descriptors, labels):
         # Hold this implementation specific arguments as the fields of the class.
-        self.train_dataset = train_dataset
         self.val_dataset = val_dataset
-        self.neg_per_img = neg_per_img
-        self.iou_thresh = iou_thresh
         self.n_cpus = n_cpus
         self.feature_extractor = feature_extractor
         self.descriptors = descriptors
@@ -59,17 +59,17 @@ class Objective(object):
 
     def __call__(self, trial):
         # Train SVM
-        pca_components = trial.suggest_int('PCA components', 10, 200, log=True)
+        pca_components = 200
+        nystroem_components = 800
         class_weight = trial.suggest_categorical('class_weight', ['None', 'balanced'])
-        gamma = trial.suggest_float('RBF gamma', 1e-10, 1, log=True)
-        n_components = trial.suggest_int('Nystroem components', 10, 800, log=True)
-        alpha = trial.suggest_float('SGD alpha', 1e-10, 1, log=True)
+        gamma = trial.suggest_float('rbf_gamma', 1e-8, 10000.0, log=True)
+        alpha = trial.suggest_float('sgd_alpha', 1e-7, 0.1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
                               ('pca', PCA(n_components=pca_components)),
-                              ('feature_map', Nystroem(gamma=gamma, n_components=n_components)),
+                              ('feature_map', Nystroem(gamma=gamma, n_components=nystroem_components)),
                               ('model', SGDClassifier(alpha=alpha,
                                                       class_weight=class_weight if class_weight != 'None' else None,
-                                                      fit_intercept=False, max_iter=100000))])
+                                                      max_iter=100000, early_stopping=True))])
         start = time()
         clf.fit(self.descriptors, self.labels)
         fit_time = time() - start
@@ -102,23 +102,33 @@ def main(args):
     feature_extractor = models.HOG(orientations=9, pixels_per_cell=(8, 8), cells_per_block=(2, 2),
                                    block_norm='L2-Hys', gamma_corr=True, resize_to=(128, 128))
 
-    # Extract features
-    descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus)
+    cache_file = os.path.join(args.cached_path, 'classical_hyperopt.cached.pickle')
+    if os.path.isfile(cache_file):
+        with open(cache_file, 'rb') as f:
+            descriptors, labels, seed = pickle.load(f)
+        if seed != args.seed:
+            raise RuntimeWarning("Cached seed different to passed seed")
+        logging.info("Loading existing cached training data")
+    else:
+        # Extract features
+        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus)
 
-    clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
-    clf.fit(descriptors[:2], [0, 1])
+        clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
+        clf.fit(descriptors[:2], [0, 1])
 
-    # Apply negative mining
-    logging.info("Performing hard negative mining")
-    negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
-                                                         iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
-                                                         cpus=args.n_cpus)
-    descriptors += negative_samples
-    labels += [0 for _ in negative_samples]
-    logging.info(f"Added {len(negative_samples)} negatives to the {len(descriptors) - len(negative_samples)} positives")
+        # Apply negative mining
+        logging.info("Performing hard negative mining")
+        negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
+                                                             iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
+                                                             cpus=args.n_cpus)
+        descriptors += negative_samples
+        labels += [0 for _ in negative_samples]
+        logging.info(
+            f"Added {len(negative_samples)} negatives to the {len(descriptors) - len(negative_samples)} positives")
+        with open(cache_file, 'wb') as f:
+            pickle.dump((descriptors, labels, args.seed), f)
 
-    objective = Objective(train_dataset, val_dataset, args.neg_per_img, args.iou_thresh, args.n_cpus, feature_extractor,
-                          descriptors, labels)
+    objective = Objective(val_dataset, args.n_cpus, feature_extractor, descriptors, labels)
 
     with open(args.db_login, "r") as f:
         login = json.load(f)
@@ -128,11 +138,16 @@ def main(args):
         heartbeat_interval=1,
         failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
     )
+    search_space = {
+        "class_weight": ["None", "balanced"],
+        "rbf_gamma": np.logspace(-8, 4, 13),
+        "sgd_alpha": np.logspace(-7, -1, 7)
+    }
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(multivariate=True, group=True, constant_liar=True),
+        sampler=optuna.samplers.GridSampler(search_space)
     )
-    study.optimize(objective, n_trials=args.n_trials)
+    study.optimize(objective)
 
 
 if __name__ == '__main__':

@@ -62,8 +62,8 @@ class Objective(object):
         pca_components = 200
         nystroem_components = 800
         class_weight = trial.suggest_categorical('class_weight', ['None', 'balanced'])
-        gamma = trial.suggest_float('rbf_gamma', 1e-8, 10000.0, log=True)
-        alpha = trial.suggest_float('sgd_alpha', 1e-7, 0.1, log=True)
+        gamma = trial.suggest_float('rbf_gamma', 1e-8, 1e-3, log=True)
+        alpha = trial.suggest_float('sgd_alpha', 1e-12, 1e-2, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
                               ('pca', PCA(n_components=pca_components)),
                               ('feature_map', Nystroem(gamma=gamma, n_components=nystroem_components)),

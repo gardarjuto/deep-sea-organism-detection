@@ -67,9 +67,7 @@ class Objective(object):
         clf = Pipeline(steps=[('scaler', StandardScaler()),
                               ('pca', PCA(n_components=pca_components)),
                               ('feature_map', Nystroem(gamma=gamma, n_components=nystroem_components)),
-                              ('model', SGDClassifier(alpha=alpha,
-                                                      class_weight=class_weight if class_weight != 'None' else None,
-                                                      max_iter=100000, early_stopping=True))])
+                              ('model', SGDClassifier(alpha=alpha, max_iter=100000, early_stopping=True))])
         start = time()
         clf.fit(self.descriptors, self.labels)
         fit_time = time() - start
@@ -105,9 +103,7 @@ def main(args):
     cache_file = os.path.join(args.cached_path, 'classical_hyperopt.cached.pickle')
     if os.path.isfile(cache_file):
         with open(cache_file, 'rb') as f:
-            descriptors, labels, seed = pickle.load(f)
-        if seed != args.seed:
-            raise RuntimeWarning("Cached seed different to passed seed")
+            descriptors, labels = pickle.load(f)
         logging.info("Loading existing cached training data")
     else:
         # Extract features
@@ -126,7 +122,9 @@ def main(args):
         logging.info(
             f"Added {len(negative_samples)} negatives to the {len(descriptors) - len(negative_samples)} positives")
         with open(cache_file, 'wb') as f:
-            pickle.dump((descriptors, labels, args.seed), f)
+            pickle.dump((descriptors, labels), f)
+
+    logging.info(f"Training on {len(descriptors)} samples with {len(descriptors[0])} dimensions")
 
     objective = Objective(val_dataset, args.n_cpus, feature_extractor, descriptors, labels)
 
@@ -139,9 +137,8 @@ def main(args):
         failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
     )
     search_space = {
-        "class_weight": ["None", "balanced"],
-        "rbf_gamma": np.logspace(-8, 4, 13),
-        "sgd_alpha": np.logspace(-7, -1, 7)
+        "rbf_gamma": np.logspace(-8, -3, 6),
+        "sgd_alpha": np.logspace(-12, -2, 11)
     }
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,

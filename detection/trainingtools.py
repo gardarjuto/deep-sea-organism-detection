@@ -230,10 +230,11 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
 
         if bg_clf and bg_clf.predict(fd) == 0:
             continue
-        pred, conf = get_classification(obj_clf, fd)
-        if pred[0] > 0 and conf > 0:
-            detections[pred[0]].append([x, y, x + w, y + h])
-            confidence[pred[0]].append(conf)
+        confs = obj_clf.decision_function(fd)
+        for i, conf in enumerate(confs[1:], start=1):
+            if conf > 0:
+                detections[i].append([x, y, x + w, y + h])
+                confidence[i].append(conf)
 
     boxes = []
     labels = []

@@ -231,7 +231,7 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
         if bg_clf and bg_clf.predict(fd) == 0:
             continue
         confs = obj_clf.decision_function(fd)
-        for i, conf in enumerate(confs[1:], start=1):
+        for i, conf in enumerate(confs[0][1:], start=1):
             if conf > 0:
                 detections[i].append([x, y, x + w, y + h])
                 confidence[i].append(conf)

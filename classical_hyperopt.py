@@ -59,13 +59,8 @@ class Objective(object):
 
     def __call__(self, trial):
         # Train SVM
-        pca_components = 200
-        nystroem_components = 800
-        gamma = trial.suggest_float('rbf_gamma', 1e-8, 1e-3, log=True)
         alpha = trial.suggest_float('sgd_alpha', 1e-12, 1e-2, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
-                              ('pca', PCA(n_components=pca_components)),
-                              ('feature_map', Nystroem(gamma=gamma, n_components=nystroem_components)),
                               ('model', SGDClassifier(alpha=alpha, max_iter=100000, early_stopping=True))])
         start = time()
         clf.fit(self.descriptors, self.labels)
@@ -136,7 +131,6 @@ def main(args):
         failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
     )
     search_space = {
-        "rbf_gamma": np.logspace(-8, -3, 6),
         "sgd_alpha": np.logspace(-12, -2, 11)
     }
     study = optuna.create_study(

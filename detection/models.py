@@ -95,18 +95,18 @@ class HOG:
         res = pool(delayed(self.extract_from_sample)(np.array(img), targets) for img, targets in dataset)
         if horizontal_flip:
             res.extend(
-                pool(delayed(self.extract_from_sample)(flip_horizontal(np.array(img), targets))
+                pool(delayed(self.extract_from_sample)(*flip_horizontal(np.array(img), targets))
                      for img, targets in dataset)
             )
         if rotations:
             for angle in rotations:
                 res.extend(
-                    pool(delayed(self.extract_from_sample)(apply_rotation(np.array(img), targets, angle))
+                    pool(delayed(self.extract_from_sample)(*apply_rotation(np.array(img), targets, angle))
                          for img, targets in dataset)
                 )
                 res.extend(
-                    pool(delayed(self.extract_from_sample)(apply_rotation(*flip_horizontal(np.array(img), targets),
-                                                                          angle))
+                    pool(delayed(self.extract_from_sample)(*apply_rotation(*flip_horizontal(np.array(img), targets),
+                                                                           angle))
                          for img, targets in dataset)
                 )
 

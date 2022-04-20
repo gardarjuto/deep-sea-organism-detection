@@ -24,7 +24,7 @@ def flip_horizontal(image, targets):
     boxes[:, 0] = image.shape[2] - boxes[:, 0] - widths
     boxes[:, 2] = boxes[:, 0] + widths
     new_targets['boxes'] = boxes
-    return torch.flip(image, dims=(2,)), targets
+    return image[:, ::-1], targets
 
 
 def apply_rotation(image, targets, angle):
@@ -33,12 +33,12 @@ def apply_rotation(image, targets, angle):
 
     matrix = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
 
-    abs_cos = abs(np.cos(np.deg2rad(angle)))
-    abs_sin = abs(np.sin(np.deg2rad(angle)))
+    cos = np.cos(np.deg2rad(angle))
+    sin = np.sin(np.deg2rad(angle))
 
     # find width and height after rotation
-    new_w = int(h * abs_sin + w * abs_cos)
-    new_h = int(h * abs_cos + w * abs_sin)
+    new_w = int(h * abs(sin) + w * abs(cos))
+    new_h = int(h * abs(cos) + w * abs(sin))
 
     # translate rotation matrix to image center within the new bounds
     matrix[0, 2] += (new_w - w) / 2
@@ -54,16 +54,16 @@ def apply_rotation(image, targets, angle):
     boxes[:, [0, 2]] += (new_w - w) / 2
     boxes[:, [1, 3]] += (new_h - h) / 2
 
-    left_upper = torch.cat((boxes[:, :2].T, torch.ones(1, boxes.shape[0])))
-    right_lower = torch.cat((boxes[:, 2:].T, torch.ones(1, boxes.shape[0])))
+    left_upper = torch.cat((boxes[:, [0, 1]].T, torch.ones(1, boxes.shape[0])))
+    right_lower = torch.cat((boxes[:, [2, 3]].T, torch.ones(1, boxes.shape[0])))
     right_upper = torch.cat((boxes[:, [2, 1]].T, torch.ones(1, boxes.shape[0])))
     left_lower = torch.cat((boxes[:, [0, 3]].T, torch.ones(1, boxes.shape[0])))
 
-    tensor_matrix = torch.from_numpy(matrix.astype(np.float32))
-    new_left_upper = tensor_matrix @ left_upper
-    new_right_upper = tensor_matrix @ right_upper
-    new_left_lower = tensor_matrix @ left_lower
-    new_right_lower = tensor_matrix @ right_lower
+    box_matrix = torch.from_numpy(cv2.getRotationMatrix2D((new_w / 2, new_h / 2), angle, 1.0).astype(np.float32))
+    new_left_upper = box_matrix @ left_upper
+    new_right_upper = box_matrix @ right_upper
+    new_left_lower = box_matrix @ left_lower
+    new_right_lower = box_matrix @ right_lower
 
     xs = torch.vstack((new_left_upper[0], new_right_upper[0], new_left_lower[0], new_right_lower[0]))
     ys = torch.vstack((new_left_upper[1], new_right_upper[1], new_left_lower[1], new_right_lower[1]))
@@ -75,7 +75,6 @@ def apply_rotation(image, targets, angle):
 
     new_boxes = torch.stack((x_min, y_min, x_max, y_max), dim=1)
     new_targets['boxes'] = new_boxes
-
     return rotated_image, new_targets
 
 
@@ -92,15 +91,25 @@ class HOG:
 
     def extract_all(self, dataset, cpus=1, horizontal_flip=False, rotations=None):
         """Extracts features from all samples in dataset with optional image augmentation"""
-        samples = [(img, targets) for img, targets in dataset]
+        pool = Parallel(n_jobs=cpus)
+        res = pool(delayed(self.extract_from_sample)(np.array(img), targets) for img, targets in dataset)
         if horizontal_flip:
-            samples += [flip_horizontal(img, targets) for img, targets in samples]
-        #if rotations:
-        #    for rot in rotations:
-        #        samples += [apply_rotation(img, targets, rot) for img, targets in samples]
+            res.extend(
+                pool(delayed(self.extract_from_sample)(flip_horizontal(np.array(img), targets))
+                     for img, targets in dataset)
+            )
+        if rotations:
+            for angle in rotations:
+                res.extend(
+                    pool(delayed(self.extract_from_sample)(apply_rotation(np.array(img), targets, angle))
+                         for img, targets in dataset)
+                )
+                res.extend(
+                    pool(delayed(self.extract_from_sample)(apply_rotation(*flip_horizontal(np.array(img), targets),
+                                                                          angle))
+                         for img, targets in dataset)
+                )
 
-        res = Parallel(n_jobs=cpus)(delayed(self.extract_from_sample)(img, targets)
-                                    for img, targets in samples)
         res = [pair for pairs in res for pair in pairs]
         descriptors, labels = list(map(list, zip(*res)))
         return descriptors, labels
@@ -109,7 +118,7 @@ class HOG:
         res = []
         for box, label in zip(targets['boxes'], targets['labels']):
             x0, y0, x1, y1 = box.int()
-            cropped = F.crop(image, y0, x0, y1 - y0, x1 - x0).permute(1, 2, 0)
+            cropped = image[y0:y1, x0:x1]
             fd = self.extract(cropped)
             res.append((fd, label.item()))
         return res

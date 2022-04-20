@@ -2,6 +2,7 @@ import math
 import os
 import sys
 
+import PIL.Image
 import cv2
 import matplotlib.pyplot as plt
 import numpy as np
@@ -218,7 +219,8 @@ def get_classification(clf, sample):
 
 
 def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=None):
-    image = np.transpose(image.numpy(), (1, 2, 0))
+    if isinstance(image, PIL.Image.Image):
+        image = np.array(image)
     bboxes = get_detections_ss(image, resize_height=ss_height)
 
     detections = {cl: [] for cl in obj_clf.classes_}
@@ -282,6 +284,8 @@ def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per
 
 
 def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=None):
+    if isinstance(image, PIL.Image.Image):
+        image = np.array(image)
     predictions = get_predictions(clf, feature_extractor, image)
     pred_boxes = predictions['boxes']
     pred_labels = predictions['labels']
@@ -305,7 +309,7 @@ def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limi
     hard_negatives = []
     for box in hn_filtered:
         x0, y0, x1, y1 = box.int()
-        cropped_img = F.crop(image, y0, x0, y1 - y0, x1 - x0)
+        cropped_img = image[y0:y1, x0:x1]
         fd = feature_extractor.extract(cropped_img)
         hard_negatives.append(fd)
     return hard_negatives

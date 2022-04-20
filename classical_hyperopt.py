@@ -106,7 +106,9 @@ def main(args):
         logging.info("Loading existing cached training data")
     else:
         # Extract features
-        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus, horizontal_flip=True)
+        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus,
+                                                            horizontal_flip=True,
+                                                            rotations=[30, -30])
 
         clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
         clf.fit(descriptors[:2], [0, 1])

@@ -59,8 +59,13 @@ class Objective(object):
 
     def __call__(self, trial):
         # Train SVM
+        pca_components = 300
+        rbf_components = 1000
         alpha = trial.suggest_float('sgd_alpha', 1e-12, 1e-2, log=True)
+        gamma = trial.suggest_float('rbf_gamma', 1e-8, 0.1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
+                              ('pca', PCA(n_components=pca_components)),
+                              ('feature_map', Nystroem(n_components=rbf_components, gamma=gamma)),
                               ('model', SGDClassifier(alpha=alpha, max_iter=100000, early_stopping=True))])
         start = time()
         clf.fit(self.descriptors, self.labels)
@@ -101,7 +106,7 @@ def main(args):
         logging.info("Loading existing cached training data")
     else:
         # Extract features
-        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus)
+        descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus, horizontal_flip=True)
 
         clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
         clf.fit(descriptors[:2], [0, 1])
@@ -131,7 +136,8 @@ def main(args):
         failed_trial_callback=RetryFailedTrialCallback(max_retry=MAX_RETRY),
     )
     search_space = {
-        "sgd_alpha": np.logspace(-12, -2, 11)
+        "sgd_alpha": np.logspace(-11, -5, 7),
+        "rbf_gamma": np.logspace(-6, -3, 4)
     }
     study = optuna.create_study(
         storage=storage, study_name=args.study_name, direction="maximize", load_if_exists=True,

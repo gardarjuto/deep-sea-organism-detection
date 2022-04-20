@@ -92,7 +92,6 @@ class HOG:
 
     def extract_all(self, dataset, cpus=1, horizontal_flip=False, rotations=None):
         """Extracts features from all samples in dataset with optional image augmentation"""
-        assert isinstance(dataset[0][0], PIL.Image)
         samples = [(img, targets) for img, targets in dataset]
         if horizontal_flip:
             samples += [flip_horizontal(img, targets) for img, targets in samples]

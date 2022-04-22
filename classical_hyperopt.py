@@ -60,7 +60,7 @@ class Objective(object):
     def __call__(self, trial):
         # Train SVM
         pca_components = 300
-        rbf_components = 1000
+        rbf_components = 2000
         alpha = trial.suggest_float('sgd_alpha', 1e-12, 1e-2, log=True)
         gamma = trial.suggest_float('rbf_gamma', 1e-8, 0.1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),

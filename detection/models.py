@@ -5,6 +5,7 @@ import PIL
 import cv2
 import torch
 from joblib import Parallel, delayed
+from matplotlib import pyplot as plt
 from skimage.transform import resize
 from skimage.feature import hog
 import torchvision
@@ -112,12 +113,14 @@ class HOG:
 
         res = [pair for pairs in res for pair in pairs]
         descriptors, labels = list(map(list, zip(*res)))
-        return descriptors, labels
+        return np.array(descriptors, dtype=np.float32), np.array(labels)
 
     def extract_from_sample(self, image, targets):
         res = []
         for box, label in zip(targets['boxes'], targets['labels']):
             x0, y0, x1, y1 = box.int()
+            if not 0 <= x0 < x1 <= image.shape[1] or not 0 <= y0 < y1 <= image.shape[0]:
+                continue
             cropped = image[y0:y1, x0:x1]
             fd = self.extract(cropped)
             res.append((fd, label.item()))

@@ -118,8 +118,8 @@ def main(args):
         negative_samples = trainingtools.mine_hard_negatives(clf, feature_extractor, train_dataset,
                                                              iou_thresh=args.iou_thresh, max_per_img=args.neg_per_img,
                                                              cpus=args.n_cpus)
-        descriptors += negative_samples
-        labels += [0 for _ in negative_samples]
+        descriptors = np.concatenate((descriptors, negative_samples))
+        labels = np.concatenate((labels, np.zeros(negative_samples.shape[0], dtype=np.int64)))
         logging.info(
             f"Added {len(negative_samples)} negatives to the {len(descriptors) - len(negative_samples)} positives")
         with open(cache_file, 'wb') as f:

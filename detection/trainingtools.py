@@ -280,7 +280,7 @@ def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per
         delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
         for img, targets in dataset)
 
-    return [fd for sublist in hard_negatives for fd in sublist]
+    return np.array([fd for sublist in hard_negatives for fd in sublist], dtype=np.float32)
 
 
 def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=None):

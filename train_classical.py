@@ -58,6 +58,13 @@ def get_args_parser(add_help=True):
     parser.add_argument("--step-size", default=(20, 20), type=int, nargs="+",
                         help="step size in pixels of sliding window")
 
+    # Classifier parameters
+    parser.add_argument("--pca-components", default=300, type=int)
+    parser.add_argument("--rbf-components", default=1000, type=int)
+    parser.add_argument("--sgd-alpha", default=1e-10, type=float)
+    parser.add_argument("--rbf-gamma", default=1e-4, type=float)
+    parser.add_argument("--max-iter", default=10000, type=int)
+
     # Evaluation parameters
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
     parser.add_argument("--evaluate-only", action="store_true", help="only evaluate model")
@@ -128,14 +135,11 @@ def main(args):
 
     logging.info(f"Training on {len(descriptors)} samples with {len(descriptors[0])} dimensions")
 
-    pca_components = 300
-    rbf_components = 2000
-    alpha = 0.01
-    gamma = 0.01
     clf = Pipeline(steps=[('scaler', StandardScaler()),
-                          ('pca', PCA(n_components=pca_components)),
-                          ('feature_map', Nystroem(n_components=rbf_components, gamma=gamma)),
-                          ('model', SGDClassifier(alpha=alpha, max_iter=100000, early_stopping=True))])
+                          ('pca', PCA(n_components=args.pca_components)),
+                          ('feature_map', Nystroem(n_components=args.rbf_components, gamma=args.rbf_gamma)),
+                          ('model', SGDClassifier(alpha=args.sgd_alpha, max_iter=args.max_iter,
+                                                  early_stopping=True))])
     start = time()
     clf.fit(descriptors, labels)
     fit_time = time() - start

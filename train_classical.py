@@ -11,6 +11,7 @@ from sklearn.kernel_approximation import Nystroem
 from sklearn.linear_model import SGDClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.dummy import DummyClassifier
 import pickle
 
 from detection import models, utils, datasets, evaluation
@@ -43,7 +44,7 @@ def get_args_parser(add_help=True):
     # HOG parameters
     parser.add_argument("--hog-bins", default=9, type=int, help="number or bins for orientation binning in HOG")
     parser.add_argument("--ppc", default=(8, 8), nargs="+", type=int, help="pixels per cell in HOG")
-    parser.add_argument("--cpb", default=(3, 3), nargs="+", type=int, help="cells per block in HOG")
+    parser.add_argument("--cpb", default=(2, 2), nargs="+", type=int, help="cells per block in HOG")
     parser.add_argument("--block-norm", default="L2-Hys", type=str, help="block norm in HOG")
     parser.add_argument("--gamma-corr", action="store_true", help="use gamma correction in HOG")
     parser.add_argument("--no-gamma-corr", action="store_false", help="don't use gamma correction in HOG")
@@ -118,7 +119,7 @@ def main(args):
         descriptors, labels = feature_extractor.extract_all(train_dataset, cpus=args.n_cpus,
                                                             horizontal_flip=True,
                                                             rotations=[30, -30])
-        clf = sklearn.dummy.DummyClassifier(strategy='constant', constant=1)
+        clf = DummyClassifier(strategy='constant', constant=1)
         clf.fit(descriptors[:2], [0, 1])
 
         # Apply negative mining

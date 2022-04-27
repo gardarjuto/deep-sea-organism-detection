@@ -14,6 +14,7 @@ from skimage.util import view_as_windows
 
 
 def initialise_distributed(args):
+    """Initialises environment for distributed training on GPUs."""
     if "RANK" not in os.environ or "WORLD_SIZE" not in os.environ:
         logging.info("Not using distributed mode")
         args.distributed = False
@@ -34,6 +35,7 @@ def get_world_size():
 
 
 def initialise_logging(args):
+    """Initialise logging environment."""
     if not is_master_process():
         logging.disable()
         return
@@ -74,6 +76,7 @@ def tensor_encode_id(img_id):
 
 
 def tensor_decode_id(img_id_enc):
+    """Inverse function of tensor_encode_id"""
     ints = img_id_enc.tolist()
     img_id = ''.join([hex(part)[2:].zfill(8) for part in ints])
     for ind in [8, 13, 18, 23]:
@@ -82,6 +85,7 @@ def tensor_decode_id(img_id_enc):
 
 
 def sliding_window(image, win_size, step_size):
+    """Implements sliding window over an image."""
     for j, row in enumerate(view_as_windows(image, win_size, step_size)):
         for i, col in enumerate(row):
             x, y = i * step_size[1], j * step_size[0]
@@ -89,7 +93,8 @@ def sliding_window(image, win_size, step_size):
                 yield x, y, window
 
 
-def iou_otm(box, boxes):
+def iou_one_to_many(box, boxes):
+    """Computes one-to-many intersection over union"""
     x0y0 = np.maximum(boxes[:, :2], box[:2])
     x1y1 = np.minimum(boxes[:, 2:], box[2:])
 
@@ -104,22 +109,21 @@ def iou_otm(box, boxes):
 
 
 def non_maxima_suppression(boxes, confidence_scores, threshold=0.5):
+    """Performes non-maxima suppression filtering on bounding boxes."""
     filtered_boxes = []
     filtered_confidence = []
     while boxes.size > 0:
         i = confidence_scores.argmax()
         filtered_boxes.append(boxes[i])
         filtered_confidence.append(confidence_scores[i])
-        ious = iou_otm(boxes[i], boxes)
+        ious = iou_one_to_many(boxes[i], boxes)
         boxes = boxes[ious <= threshold]
         confidence_scores = confidence_scores[ious <= threshold]
     return filtered_boxes, filtered_confidence
 
 
 def plot_confusion_matrix(conf_mat, filename, labels=None, log_scale=False, show_values=False, cmap='viridis'):
-    """
-    Plots a confusion matrix with or without labels.
-    """
+    """Plots a confusion matrix with or without labels."""
     fig, ax = plt.subplots(figsize=(6, 6))
     im = ax.imshow(conf_mat, cmap=cmap, norm=SymLogNorm(10) if log_scale else None, extent=[0, 1, 0, 1], origin='lower',
                    interpolation="nearest")
@@ -144,6 +148,7 @@ def plot_confusion_matrix(conf_mat, filename, labels=None, log_scale=False, show
 
 
 def make_deterministic(seed):
+    """Forces a deterministic run."""
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
@@ -155,6 +160,7 @@ def make_deterministic(seed):
 
 
 def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None, conf_thresh=None):
+    """Visualises image with predicted and ground truth bounding boxes"""
     fig, ax = plt.subplots(figsize=(10, 10))
     if isinstance(image, torch.Tensor):
         ax.imshow(image.permute(1, 2, 0))

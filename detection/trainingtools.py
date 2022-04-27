@@ -1,7 +1,6 @@
 import math
 import os
-import sys
-
+import warnings
 import PIL.Image
 import cv2
 import matplotlib.pyplot as plt
@@ -10,12 +9,6 @@ import torch
 from PIL import Image
 from joblib import delayed, Parallel
 from skimage.transform import pyramid_gaussian
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import SGDClassifier
-from sklearn.kernel_approximation import Nystroem
-from sklearn.decomposition import PCA
-
 from torchvision.ops import box_iou
 from torchvision.transforms import transforms as T, functional as F
 from torchvision.utils import draw_bounding_boxes
@@ -25,6 +18,7 @@ from detection import utils, evaluation, datasets
 
 
 def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every=None, scaler=None):
+    """Trains the neural model for one epoch."""
     model.train()
 
     total_loss_classifier = 0.0
@@ -86,6 +80,7 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
 
 @torch.inference_mode()
 def visualise_prediction(model, device, img_name, dataset, show_ground_truth=True):
+    """Visualise the predictions of a model with bounding boxes"""
     model.eval()
     idx = dataset.index_of(img_name)
     img, targets = dataset[idx]
@@ -107,6 +102,7 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 
 @torch.inference_mode()
 def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=False):
+    """Evaluate the model on a test set. Produces an optional precision-recall plot"""
     model.eval()
 
     evaluator = evaluation.FathomNetEvaluator(dataset=loader.dataset, device=device, iou_thresh=iou_thresh)
@@ -136,19 +132,8 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
     return res
 
 
-def train_svm(descriptors, labels, num_classes, pca_components=200, feature_map_gamma=1e-4, feature_map_components=700,
-              sgd_alpha=3e-8, class_weight='balanced', fit_intercept=False, max_iter=100000):
-    if num_classes != len(set(labels)):
-        raise RuntimeError(f"Expected {num_classes} classes, got {len(set(labels))}.")
-    clf = Pipeline(steps=[('scaler', StandardScaler()), ('pca', PCA(n_components=pca_components)),
-                          ('feature_map', Nystroem(gamma=feature_map_gamma, n_components=feature_map_components)),
-                          ('model', SGDClassifier(alpha=sgd_alpha, class_weight=class_weight,
-                                                  fit_intercept=fit_intercept, max_iter=max_iter))])
-    clf.fit(descriptors, labels)
-    return clf
-
-
 def selective_search_roi(image, resize_height=250, quality=False):
+    """Produces region proposals using the selective search algorithm."""
     scale_factor = resize_height / image.shape[0]
     resize_width = int(image.shape[1] * scale_factor)
     image = cv2.resize(image, (resize_width, resize_height))
@@ -165,6 +150,7 @@ def selective_search_roi(image, resize_height=250, quality=False):
 
 
 def get_detections_ss(image, resize_height=250):
+    """Calls the selective search function. Exists for backward compatability."""
     bboxes = selective_search_roi(image, resize_height=resize_height)
     bboxes = bboxes[(bboxes[:, 2] > 3) & (bboxes[:, 3] > 3)]
     return bboxes
@@ -173,6 +159,7 @@ def get_detections_ss(image, resize_height=250):
 def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
                    visualise=False):
     """DEPRECATED. Use get_detections_ss instead."""
+    warnings.warn("Use get_detections_ss instead", DeprecationWarning)
     total = 0
     n_detect = 0
     detections = {cl: [] for cl in svm.classes_}
@@ -210,6 +197,7 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
 
 
 def get_classification(clf, sample):
+    """Run classifier on sample. If using a DummyClassifier then return a random confidence."""
     pred = clf.predict(sample)
     if hasattr(clf, 'decision_function'):
         conf = clf.decision_function(sample).max()
@@ -219,6 +207,7 @@ def get_classification(clf, sample):
 
 
 def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=None):
+    """Get bounding box classifications from an image."""
     if isinstance(image, PIL.Image.Image):
         image = np.array(image)
     bboxes = get_detections_ss(image, resize_height=ss_height)
@@ -255,6 +244,7 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
 
 def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None, plot_pc=False,
                         cpus=1):
+    """Evaluates a classical classifier on a test set. Supports parallel execution."""
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
 
@@ -276,6 +266,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
 
 
 def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=None, cpus=1):
+    """Perform mining on a dataset to extract negatives. Supports parallel execution."""
     hard_negatives = Parallel(n_jobs=cpus)(
         delayed(mine_single_img)(clf, feature_extractor, img, targets, iou_thresh=iou_thresh, limit=max_per_img)
         for img, targets in dataset)
@@ -284,6 +275,7 @@ def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per
 
 
 def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limit=None):
+    """Perform hard negative mining on a single image"""
     if isinstance(image, PIL.Image.Image):
         image = np.array(image)
     predictions = get_predictions(clf, feature_extractor, image)
@@ -315,25 +307,9 @@ def mine_single_img(clf, feature_extractor, image, targets, iou_thresh=0.5, limi
     return hard_negatives
 
 
-def train_classifier(classifier_name, X, y, num_classes, kwargs):
-    if len(np.unique(y)) != num_classes:
-        raise RuntimeError('Label vector missing some classes')
-    if classifier_name == 'SGD+Nystroem':
-        clf = Pipeline(steps=[('scaler', StandardScaler()),
-                              ('pca', PCA(n_components=kwargs['pca_components'])),
-                              ('feature_map', Nystroem(gamma=kwargs['nystroem_gamma'],
-                                                       n_components=kwargs['nystroem_components'])),
-                              ('model', SGDClassifier(alpha=kwargs['sgd_alpha'], class_weight=kwargs['class_weight'],
-                                                      fit_intercept=kwargs['fit_intercept'],
-                                                      max_iter=kwargs['max_iter']))])
-    else:
-        raise ValueError('Classifier name not supported')
-    clf.fit(X, y)
-    return clf
-
-
 def evaluate_two_stage(bg_clf, obj_clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None,
                        plot_pc=False, cpus=1):
+    """Evaluate a two-stage classical classifier. Supports parallel execution."""
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"Object classifier has classes {obj_clf.classes_}")
 

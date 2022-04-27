@@ -18,6 +18,7 @@ import logging
 def get_args_parser(add_help=True):
     parser = argparse.ArgumentParser(description="Marine Organism Object Detection Training", add_help=add_help)
 
+    # General
     parser.add_argument("--data-path", default="data", type=str, help="dataset path")
     parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
     parser.add_argument("--dataset", default="FathomNet", type=str, help="dataset name")
@@ -26,12 +27,19 @@ def get_args_parser(add_help=True):
     parser.add_argument(
         "--train-ratio", "--tr", default=0.8, type=float, help="proportion of dataset to use for training"
     )
+    parser.add_argument("--checkpoint", default=None, type=str, help="path of stored checkpoint")
+    parser.add_argument("--start-epoch", default=0, type=int, help="start epoch")
+    parser.add_argument("--evaluate-only", action="store_true", help="Only evaluate model")
+    parser.add_argument(
+        "--seed", type=int, default=None, help="Fix random generator seed. Setting this forces a deterministic run"
+    )
+
+
+    # Training hyperparameters
     parser.add_argument(
         "-b", "--batch-size", default=2, type=int, help="images per gpu, the total batch size is $NGPU x batch_size"
     )
     parser.add_argument("--epochs", default=5, type=int, metavar="N", help="number of total epochs to run")
-    parser.add_argument("--checkpoint", default=None, type=str, help="path of stored checkpoint")
-    parser.add_argument("--start-epoch", default=0, type=int, help="start epoch")
     parser.add_argument(
         "-j", "--workers", default=4, type=int, metavar="N", help="number of data loading workers (default: 4)"
     )
@@ -61,26 +69,18 @@ def get_args_parser(add_help=True):
         "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
     )
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
-    parser.add_argument("--aspect-ratio-group-factor", default=3, type=int)
-    parser.add_argument("--rpn-score-thresh", default=None, type=float, help="rpn score threshold for faster-rcnn")
-    parser.add_argument(
-        "--data-augmentation", default="hflip", type=str, help="data augmentation policy (default: hflip)"
-    )
     parser.add_argument("--sync-bn", dest="sync_bn", help="Use sync batch norm", action="store_true")
+    parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
     parser.add_argument(
         "--pretrained", dest="pretrained", help="Use pre-trained models from the modelzoo", action="store_true"
     )
     parser.add_argument("--iou-thresh", default=0.5, type=float, help="IoU threshold for evaluation")
-    parser.add_argument("--log-file", "--lf", default=None, type=str, help="path to file for writing logs. If "
-                                                                           "omitted, writes to stdout")
+
+    # Logging
+    parser.add_argument("--log-file", "--lf", default=None, type=str,
+                        help="path to file for writing logs. If omitted, writes to stdout")
     parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
     parser.add_argument("--log-every", "--pe", default=10, type=int, help="log every ith batch")
-    parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
-    parser.add_argument("--evaluate-only", action="store_true", help="Only evaluate model")
-
-    parser.add_argument(
-        "--seed", type=int, default=None, help="Fix random generator seed. Setting this forces a deterministic run"
-    )
 
     # Distributed training
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
@@ -117,7 +117,6 @@ def main(args):
     logging.info("Creating data loaders...")
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
-        # test_sampler = torch.utils.data.distributed.DistributedSampler(test_dataset, shuffle=False)
     else:
         train_sampler = torch.utils.data.RandomSampler(train_dataset)
     test_sampler = torch.utils.data.SequentialSampler(test_dataset)
@@ -140,6 +139,7 @@ def main(args):
 
     model_without_ddp = model
     if args.distributed:
+        # Convert to distributed format
         model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
         model_without_ddp = model.module
 
@@ -147,8 +147,10 @@ def main(args):
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
+    # Check for mixed precision
     scaler = torch.cuda.amp.GradScaler() if args.amp else None
 
+    # Create scheduler
     args.lr_scheduler = args.lr_scheduler.lower()
     if args.lr_scheduler == "multisteplr":
         lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
@@ -160,6 +162,7 @@ def main(args):
         )
 
     if args.checkpoint:
+        # Load model from checkpoint
         logging.info("Resuming from checkpoint...")
         checkpoint = torch.load(args.checkpoint, map_location="cpu")
         model_without_ddp.load_state_dict(checkpoint["model"])
@@ -176,7 +179,7 @@ def main(args):
                                    iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
                                    plot_pc=True)
         if args.distributed:
-            # Wait while master process saves and evaluates
+            # Wait while master process evaluates
             torch.distributed.barrier(device_ids=[args.gpu])
         return
 

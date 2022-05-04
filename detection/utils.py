@@ -159,7 +159,8 @@ def make_deterministic(seed):
     cv2.setRNGSeed(0)
 
 
-def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None, conf_thresh=None):
+def visualise_image(image, predictions=None, ground_truths=None, name_mapping=None, conf_thresh=None, c_pred='red',
+                    c_gt='yellow'):
     """Visualises image with predicted and ground truth bounding boxes"""
     fig, ax = plt.subplots(figsize=(10, 10))
     if isinstance(image, torch.Tensor):
@@ -171,7 +172,7 @@ def visualise_image(image, predictions=None, ground_truths=None, name_mapping=No
             if conf_thresh and score < conf_thresh:
                 continue
             # Create a Rectangle patch
-            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='r',
+            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor=c_pred,
                                      facecolor='none')
             # Add the patch to the Axes
             ax.add_patch(rect)
@@ -181,15 +182,15 @@ def visualise_image(image, predictions=None, ground_truths=None, name_mapping=No
             plt.text(box[0] + 10, box[3] + 10, label, size=10,
                      ha="left", va="top",
                      bbox=dict(boxstyle="square",
-                               ec='red',
-                               fc='red',
+                               ec=c_pred,
+                               fc=c_pred,
                                alpha=0.2
                                )
                      )
     if ground_truths:
         for box, label in zip(ground_truths['boxes'], ground_truths['labels']):
             # Create a Rectangle patch
-            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor='y',
+            rect = patches.Rectangle((box[0], box[1]), box[2] - box[0], box[3] - box[1], linewidth=1, edgecolor=c_gt,
                                      facecolor='none')
             # Add the patch to the Axes
             ax.add_patch(rect)
@@ -199,8 +200,8 @@ def visualise_image(image, predictions=None, ground_truths=None, name_mapping=No
             plt.text(box[0] + 10, box[3] + 10, label, size=10,
                      ha="left", va="top",
                      bbox=dict(boxstyle="square",
-                               ec='yellow',
-                               fc='yellow',
+                               ec=c_gt,
+                               fc=c_gt,
                                alpha=0.2
                                )
                      )

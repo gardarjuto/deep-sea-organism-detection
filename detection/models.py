@@ -15,17 +15,16 @@ import torchvision.transforms.functional as F
 from torchvision.ops.misc import FrozenBatchNorm2d
 import numpy as np
 
-from detection import datasets
-
 
 def flip_horizontal(image, targets):
+    assert isinstance(image, np.ndarray)
     new_targets = copy.deepcopy(targets)
     boxes = new_targets['boxes']
     widths = boxes[:, 2] - boxes[:, 0]
-    boxes[:, 0] = image.shape[2] - boxes[:, 0] - widths
+    boxes[:, 0] = image.shape[1] - boxes[:, 0] - widths
     boxes[:, 2] = boxes[:, 0] + widths
     new_targets['boxes'] = boxes
-    return image[:, ::-1], targets
+    return image[:, ::-1], new_targets
 
 
 def apply_rotation(image, targets, angle):

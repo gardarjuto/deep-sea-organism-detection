@@ -227,33 +227,23 @@ def load_datasets(name, root, classes, train_ratio):
     return train_dataset, test_dataset
 
 
-def load_train_val(name, train_path, classes, val_split, train_transforms=-1, val_transforms=-1):
-    if name == 'FathomNet':
-        if train_transforms == -1:
-            train_transforms = Compose([ToTensor(), RandomHorizontalFlip()]) #, ColorJitter(brightness=.5, contrast=.5, hue=.3)])
-        if val_transforms == -1:
-            val_transforms = Compose([ToTensor()])
-        length = len(os.listdir(os.path.join(train_path, 'images')))
-        train_idx, val_idx = train_test_split(range(length), test_size=val_split)
-        train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx, remove_empty=True)
-        val_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
-    elif name == 'FathomNetCropped':
-        train_transforms = T.Compose([T.ToTensor(), T.RandomHorizontalFlip()])
-        val_transforms = T.Compose([T.ToTensor()])
-        length = len(os.listdir(os.path.join(train_path, 'images')))
-        train_idx, val_idx = train_test_split(range(length), test_size=val_split)
-        train_dataset = FathomNetCroppedDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx)
-        val_dataset = FathomNetCroppedDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
-    elif name == 'mixed':
-        train_transforms = T.Compose([T.ToTensor(), T.RandomHorizontalFlip()])
+def load_train_val(train_path, classes, val_split, train_transforms=-1, val_transforms=-1):
+    if train_transforms == -1:
+        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()]) #, ColorJitter(brightness=.5, contrast=.5, hue=.3)])
+    if val_transforms == -1:
         val_transforms = Compose([ToTensor()])
-        length = len(os.listdir(os.path.join(train_path, 'images')))
-        train_idx, val_idx = train_test_split(range(length), test_size=val_split)
-        train_dataset = FathomNetCroppedDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx)
-        val_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
-    else:
-        raise NotImplementedError('Currently supported datasets: FathomNet, FathomNetCropped')
+    length = len(os.listdir(os.path.join(train_path, 'images')))
+    train_idx, val_idx = train_test_split(range(length), test_size=val_split)
+    train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx, remove_empty=True)
+    val_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
     return train_dataset, val_dataset
+
+
+def load_test(test_path, classes, transforms=-1):
+    if transforms == -1:
+        transforms = Compose([ToTensor()])
+    test_dataset = FathomNetDataset(root=test_path, classes=classes, transforms=transforms)
+    return test_dataset
 
 
 def remove_images_without_annotations(subset: torch.utils.data.dataset.Subset):

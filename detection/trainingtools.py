@@ -3,6 +3,7 @@ import os
 import warnings
 import PIL.Image
 import cv2
+import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -17,7 +18,7 @@ import logging
 from detection import utils, evaluation, datasets
 
 
-def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every=None, scaler=None):
+def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every=None):
     """Trains the neural model for one epoch."""
     model.train()
 
@@ -39,9 +40,8 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        with torch.cuda.amp.autocast(enabled=scaler is not None):
-            loss_dict = model(images, targets)
-            losses = sum(loss for loss in loss_dict.values())
+        loss_dict = model(images, targets)
+        losses = sum(loss for loss in loss_dict.values())
 
         loss_value = losses.item()
 
@@ -56,13 +56,8 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
         total_loss_rpn_box_reg += loss_dict['loss_rpn_box_reg']
 
         optimizer.zero_grad()
-        if scaler is not None:
-            scaler.scale(losses).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            losses.backward()
-            optimizer.step()
+        losses.backward()
+        optimizer.step()
 
         if lr_scheduler is not None:
             lr_scheduler.step()
@@ -101,7 +96,8 @@ def visualise_prediction(model, device, img_name, dataset, show_ground_truth=Tru
 
 
 @torch.inference_mode()
-def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=False):
+def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=False,
+             save_to_file=None):
     """Evaluate the model on a test set. Produces an optional precision-recall plot"""
     model.eval()
 
@@ -129,6 +125,9 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
+    if save_to_file:
+        joblib.dump(evaluator, save_to_file)
+        logging.info(f"Saved evaluator object to file {save_to_file}")
     return res
 
 
@@ -243,7 +242,7 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
 
 
 def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None, plot_pc=False,
-                        cpus=1):
+                        cpus=1, save_to_file=None):
     """Evaluates a classical classifier on a test set. Supports parallel execution."""
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
@@ -262,6 +261,9 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
+    if save_to_file:
+        joblib.dump(evaluator, save_to_file)
+        logging.info(f"Saved evaluator object to file {save_to_file}")
     return res
 
 

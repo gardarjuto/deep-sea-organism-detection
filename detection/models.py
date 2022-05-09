@@ -128,12 +128,12 @@ class HOG:
     def extract(self, image):
         im_resized = resize(image, self.resize_to, anti_aliasing=True)
         fd = hog(im_resized, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
-                 transform_sqrt=self.gamma_corr, multichannel=True)
+                 transform_sqrt=self.gamma_corr, channel_axis=-1)
         if self.center_crop:
             h, w, _ = image.shape
             im_resized2 = resize(image[h // 4:3 * h // 4, w // 4:3 * w // 4], self.resize_to, anti_aliasing=True)
             fd2 = hog(im_resized2, self.orientations, self.pixels_per_cell, self.cells_per_block, self.block_norm,
-                      transform_sqrt=self.gamma_corr, multichannel=True)
+                      transform_sqrt=self.gamma_corr, channel_axis=-1)
             fd = np.concatenate([fd, fd2])
         return fd
 

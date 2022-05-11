@@ -115,13 +115,14 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
 
-    res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+    AP_res, IoU_res = evaluator.summarise(method="101")
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
-    logging.info(f"Summary (IoU): mIoU=({res['mIoU1']:.3f}, {res['mIoU2']:.3f}), "
-                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in res.items() if key != 'mIoU1' and key != 'mIoU2']))
+                              else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
+    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU1']:.3f}, {AP_res['mIoU2']:.3f}), "
+                 + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in IoU_res.items() if
+                              key != 'mIoU1' and key != 'mIoU2']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
@@ -254,13 +255,14 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     for targets, predictions, shape in prediction_list:
         evaluator.update(targets, predictions, *shape)
 
-    res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
+    AP_res, IoU_res = evaluator.summarise(method="101")
+    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
-    logging.info(f"Summary (IoU): mIoU=({res['mIoU1']:.3f}, {res['mIoU2']:.3f}), "
-                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in res.items() if key != 'mIoU1' and key != 'mIoU2']))
+                              else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
+    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU1']:.3f}, {AP_res['mIoU2']:.3f}), "
+                 + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in IoU_res.items() if
+                              key != 'mIoU1' and key != 'mIoU2']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)

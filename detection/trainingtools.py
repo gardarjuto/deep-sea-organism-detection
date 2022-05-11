@@ -129,7 +129,7 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
     if save_to_file:
         joblib.dump(evaluator, save_to_file)
         logging.info(f"Saved evaluator object to file {save_to_file}")
-    return res
+    return AP_res, IoU_res
 
 
 def selective_search_roi(image, resize_height=250, quality=False):
@@ -269,7 +269,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     if save_to_file:
         joblib.dump(evaluator, save_to_file)
         logging.info(f"Saved evaluator object to file {save_to_file}")
-    return res
+    return AP_res, IoU_res
 
 
 def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=None, cpus=1):

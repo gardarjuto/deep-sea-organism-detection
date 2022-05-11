@@ -92,7 +92,7 @@ def main(args):
 
     # Load datasets
     logging.info("Loading dataset...")
-    train_dataset, val_dataset = datasets.load_train_val(name='FathomNet', train_path=args.train_path, classes=classes,
+    train_dataset, val_dataset = datasets.load_train_val(train_path=args.train_path, classes=classes,
                                                          val_split=args.val_split, train_transforms=None, val_transforms=None)
 
     # Create feature extractor

@@ -259,7 +259,7 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
-    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU1']:.3f}, {AP_res['mIoU2']:.3f}), "
+    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU1']:.3f}, {IoU_res['mIoU2']:.3f}), "
                  + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in IoU_res.items() if
                               key != 'mIoU1' and key != 'mIoU2']))

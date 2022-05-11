@@ -40,8 +40,10 @@ class FathomNetEvaluator:
             pred_bitmap = np.zeros((im_height, im_width))
 
             for box in true_boxes:
+                box = box.to(torch.long)
                 gt_bitmap[box[1]:box[3], box[0]:box[1]] = 1
             for box in pred_boxes:
+                box = box.to(torch.long)
                 pred_bitmap[box[1]:box[3], box[0]:box[1]] = 1
 
             area_of_intersect = np.sum((gt_bitmap + pred_bitmap) > 1)

@@ -127,8 +127,8 @@ class FathomNetEvaluator:
             AP_res[self.dataset.get_class_name(cls)] = AP
         AP_res['mAP'] = np.mean(list(val if not isinstance(val, ZeroDivisionError) and np.isfinite(val) else 0.0
                                      for val in AP_res.values()))
-        IoU_res['mIoU1'] = np.mean(list(val[0] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError)))
-        IoU_res['mIoU2'] = np.mean(list(val[1] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError)))
+        IoU_res['mIoU'] = (np.mean(list(val[0] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError))),
+                           np.mean(list(val[1] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError))))
         return AP_res, IoU_res
 
     def plot_precision_recall(self, interpolate=True):

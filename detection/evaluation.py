@@ -15,12 +15,15 @@ class FathomNetEvaluator:
                 'TP': [],
                 'FP': [],
                 'conf': [],
-                'tot_GT': 0
+                'tot_GT': 0,
+                'intersection_area': [],
+                'union_area': []
             }
             for cls in range(1, self.num_classes + 1)
         }
 
-    def update(self, targets, predictions):
+    def update(self, targets, predictions, im_width, im_height):
+        assert im_width > im_height
         target_boxes_all = targets['boxes']
         target_labels_all = targets['labels']
         pred_boxes_all = predictions['boxes']
@@ -32,6 +35,21 @@ class FathomNetEvaluator:
             pred_boxes = pred_boxes_all[pred_labels_all == cls]
             pred_scores = pred_scores_all[pred_labels_all == cls]
 
+            # Calculate intersection and union area
+            gt_bitmap = np.zeros((im_height, im_width))
+            pred_bitmap = np.zeros((im_height, im_width))
+
+            for box in true_boxes:
+                gt_bitmap[box[1]:box[3], box[0]:box[1]] = 1
+            for box in pred_boxes:
+                pred_bitmap[box[1]:box[3], box[0]:box[1]] = 1
+
+            area_of_intersect = np.sum((gt_bitmap + pred_bitmap) > 1)
+            area_of_union = np.sum((gt_bitmap + pred_bitmap) > 0)
+            self.metrics_by_class[cls]['intersection_area'].append(area_of_intersect)
+            self.metrics_by_class[cls]['union_area'].append(area_of_union)
+
+            # Calculate TP and FP
             iou = box_iou(true_boxes, pred_boxes)
             seen = np.zeros(len(true_boxes))
             if true_boxes.numel() == 0:
@@ -70,13 +88,25 @@ class FathomNetEvaluator:
         recall = cum_tp / self.metrics_by_class[cls]['tot_GT']
         return precision, recall
 
+    def iou_for_class(self, cls):
+        if sum(self.metrics_by_class[cls]['union_area']) == 0:
+            raise ZeroDivisionError("No instances or predictions in test set")
+        iou1 = sum(self.metrics_by_class[cls]['intersection_area']) / sum(self.metrics_by_class[cls]['union_area'])
+        iou2 = np.mean(np.array(self.metrics_by_class[cls]['intersection_area']) / np.array(self.metrics_by_class[cls]['union_area']))
+        return iou1, iou2
+
     def summarise(self, method="101"):
-        res = {}
+        AP_res = {}
+        IoU_res = {}
         for cls in self.metrics_by_class:
+            try:
+                IoU_res[self.dataset.get_class_name(cls)] = self.iou_for_class(cls)
+            except ZeroDivisionError as e:
+                IoU_res[self.dataset.get_class_name(cls)] = e
             try:
                 precision, recall = self.prec_rec_for_class(cls)
             except ZeroDivisionError as e:
-                res[self.dataset.get_class_name(cls)] = e
+                AP_res[self.dataset.get_class_name(cls)] = e
                 continue
 
             if method == "101":
@@ -92,10 +122,12 @@ class FathomNetEvaluator:
                 AP = np.sum(np.diff(recall, prepend=0.0) * precision_ip)
             else:
                 raise NotImplementedError("Only supports methods '101' and 'all_points'")
-            res[self.dataset.get_class_name(cls)] = AP
-        res['mAP'] = np.mean(list(val if not isinstance(val, ZeroDivisionError) and np.isfinite(val) else 0.0
-                                  for val in res.values()))
-        return res
+            AP_res[self.dataset.get_class_name(cls)] = AP
+        AP_res['mAP'] = np.mean(list(val if not isinstance(val, ZeroDivisionError) and np.isfinite(val) else 0.0
+                                     for val in AP_res.values()))
+        AP_res['mIoU1'] = np.mean(list(val[0] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError)))
+        AP_res['mIoU2'] = np.mean(list(val[1] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError)))
+        return AP_res, IoU_res
 
     def plot_precision_recall(self, interpolate=True):
         """Returns a grid with one plot for each class"""

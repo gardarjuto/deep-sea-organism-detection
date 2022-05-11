@@ -107,13 +107,10 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-
         predictions = model(images)
         predictions = [{k: v.to(device) for k, v in t.items()} for t in predictions]
 
-        evaluator.update(targets[0], predictions[0])
+        evaluator.update(targets[0], predictions[0], *images[0].shape[:-3:-1])
 
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
@@ -122,6 +119,9 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
+    logging.info(f"Summary (IoU): mIoU=({res['mIoU1']:.3f}, {res['mIoU2']:.3f}), "
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in res.items() if key != 'mIoU1' and key != 'mIoU2']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
@@ -248,16 +248,19 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     logging.info(f"SVM has classes {clf.classes_}")
 
     prediction_list = Parallel(n_jobs=cpus)(
-        delayed(lambda targets, *args: (targets, get_predictions(*args)))(targets, clf, feature_extractor, image,
-                                                                          ss_height)
+        delayed(lambda targets, *args: (targets, get_predictions(*args), image.size))(targets, clf, feature_extractor,
+                                                                                      image, ss_height)
         for image, targets in dataset)
-    for targets, predictions in prediction_list:
-        evaluator.update(targets, predictions)
+    for targets, predictions, shape in prediction_list:
+        evaluator.update(targets, predictions, *shape)
 
     res = evaluator.summarise(method="101")
     logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={res['mAP']:.3f}, "
                  + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
                               else f"{key}={val}" for key, val in res.items() if key != 'mAP']))
+    logging.info(f"Summary (IoU): mIoU=({res['mIoU1']:.3f}, {res['mIoU2']:.3f}), "
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in res.items() if key != 'mIoU1' and key != 'mIoU2']))
     if plot_pc:
         axes = evaluator.plot_precision_recall(interpolate=True)
         plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)

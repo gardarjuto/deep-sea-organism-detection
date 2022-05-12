@@ -21,6 +21,7 @@ class FathomNetEvaluator:
             }
             for cls in range(1, self.num_classes + 1)
         }
+        self.updates = []
 
     def update(self, targets, predictions, im_width, im_height):
         assert im_width > im_height
@@ -29,6 +30,7 @@ class FathomNetEvaluator:
         pred_boxes_all = predictions['boxes']
         pred_labels_all = predictions['labels']
         pred_scores_all = predictions['scores']
+        self.updates.append((targets, predictions, im_width, im_height))
 
         for cls in range(1, self.num_classes + 1):
             true_boxes = target_boxes_all[target_labels_all == cls]

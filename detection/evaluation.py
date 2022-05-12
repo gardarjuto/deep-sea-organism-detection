@@ -96,7 +96,7 @@ class FathomNetEvaluator:
         if sum(self.metrics_by_class[cls]['union_area']) == 0:
             raise ZeroDivisionError("No instances or predictions in test set")
         iou1 = sum(self.metrics_by_class[cls]['intersection_area']) / sum(self.metrics_by_class[cls]['union_area'])
-        iou2 = np.mean(np.array(self.metrics_by_class[cls]['intersection_area']) / np.array(self.metrics_by_class[cls]['union_area']))
+        iou2 = np.nanmean(np.array(self.metrics_by_class[cls]['intersection_area']) / np.array(self.metrics_by_class[cls]['union_area']))
         return iou1, iou2
 
     def summarise(self, method="101"):

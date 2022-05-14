@@ -207,7 +207,7 @@ class ColorJitter(T.ColorJitter):
 def load_datasets(name, root, classes, train_ratio):
     """DEPRECATED"""
     if name == 'FathomNet':
-        # train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
+        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()])
         trans = Compose([ToTensor()])
         dataset = FathomNetDataset(root=root, classes=classes, transforms=trans)
 
@@ -229,12 +229,13 @@ def load_datasets(name, root, classes, train_ratio):
 
 def load_train_val(train_path, classes, val_split, train_transforms=-1, val_transforms=-1):
     if train_transforms == -1:
-        train_transforms = Compose([ToTensor(), RandomHorizontalFlip()]) #, ColorJitter(brightness=.5, contrast=.5, hue=.3)])
+        train_transforms = Compose([ToTensor(), RandomHorizontalFlip(), ColorJitter(brightness=.2, hue=.3)])
     if val_transforms == -1:
         val_transforms = Compose([ToTensor()])
     length = len(os.listdir(os.path.join(train_path, 'images')))
     train_idx, val_idx = train_test_split(range(length), test_size=val_split)
-    train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx, remove_empty=True)
+    train_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=train_transforms, subset=train_idx,
+                                     remove_empty=True)
     val_dataset = FathomNetDataset(root=train_path, classes=classes, transforms=val_transforms, subset=val_idx)
     return train_dataset, val_dataset
 

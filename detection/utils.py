@@ -179,12 +179,12 @@ def visualise_image(image, predictions=None, ground_truths=None, name_mapping=No
             label = label.item()
             if name_mapping:
                 label = name_mapping(label)
-            plt.text(box[0] + 10, box[3] + 10, label, size=10,
+            plt.text(box[0] + 10, box[3] + 10, label + str(score), size=10, color='white',
                      ha="left", va="top",
                      bbox=dict(boxstyle="square",
                                ec=c_pred,
                                fc=c_pred,
-                               alpha=0.2
+                               alpha=0.5
                                )
                      )
     if ground_truths:
@@ -205,3 +205,16 @@ def visualise_image(image, predictions=None, ground_truths=None, name_mapping=No
                                alpha=0.2
                                )
                      )
+
+
+def log_summary(AP_res, IoU_res, iou_thresh, epoch=None, n_epochs=None):
+    if epoch is not None and n_epochs is not None:
+        logging.info(f"Summary [{epoch}/{n_epochs}]")
+    else:
+        logging.info(f"Summary")
+    logging.info(f"\t(Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
+                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
+    logging.info(f"\t(IoU): mIoU=({IoU_res['mIoU']}), "
+                 + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
+                              else f"{key}={val}" for key, val in IoU_res.items() if key != 'mIoU']))

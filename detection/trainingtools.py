@@ -7,12 +7,9 @@ import joblib
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from PIL import Image
 from joblib import delayed, Parallel
 from skimage.transform import pyramid_gaussian
 from torchvision.ops import box_iou
-from torchvision.transforms import transforms as T, functional as F
-from torchvision.utils import draw_bounding_boxes
 import logging
 
 from detection import utils, evaluation, datasets
@@ -27,26 +24,16 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
     total_loss_objectness = 0.0
     total_loss_rpn_box_reg = 0.0
 
-    lr_scheduler = None
-    if epoch == 0:
-        warmup_factor = 1e-3
-        warmup_iters = min(1000, len(loader) - 1)
-
-        lr_scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=warmup_factor, total_iters=warmup_iters
-        )
-
     for i, (images, targets) in enumerate(loader, start=1):
         images = [image.to(device) for image in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         loss_dict = model(images, targets)
-        losses = sum(loss for loss in loss_dict.values())
+        losses = sum(list(loss for loss in loss_dict.values()))
+        loss = losses.item()
 
-        loss_value = losses.item()
-
-        if not math.isfinite(loss_value):
-            logging.error(f"Loss is {loss_value}, stopping training")
+        if not math.isfinite(loss):
+            logging.error(f"Loss is {loss}, stopping training")
             logging.error(loss_dict)
             return -1
 
@@ -59,45 +46,19 @@ def train_one_epoch(model, loader, device, optimizer, epoch, n_epochs, log_every
         losses.backward()
         optimizer.step()
 
-        if lr_scheduler is not None:
-            lr_scheduler.step()
-
         if log_every and i % log_every == 0:
             logging.info(f"Epoch [{epoch}/{n_epochs}]  [{i}/{len(loader)}]  LR={optimizer.param_groups[0]['lr']}  " +
                          ", ".join([f"{loss_type}={loss.item():.3f}" for loss_type, loss in loss_dict.items()]))
 
-    logging.info(f'Summary:')
-    logging.info(f'\tloss_classifier (mean): {total_loss_classifier.item() / len(loader):.3f}, '
+    logging.info(f'Summary of epoch {epoch}:')
+    logging.info(f'\tloss_classifier: {total_loss_classifier.item() / len(loader):.3f}, '
                  f'loss_box_reg: {total_loss_box_reg.item() / len(loader):.3f}, '
                  f'loss_objectness: {total_loss_objectness.item() / len(loader):.3f}, '
-                 f'loss_rpn_box_reg (mean): {total_loss_rpn_box_reg.item() / len(loader):.3f}')
+                 f'loss_rpn_box_reg: {total_loss_rpn_box_reg.item() / len(loader):.3f}')
 
 
 @torch.inference_mode()
-def visualise_prediction(model, device, img_name, dataset, show_ground_truth=True):
-    """Visualise the predictions of a model with bounding boxes"""
-    model.eval()
-    idx = dataset.index_of(img_name)
-    img, targets = dataset[idx]
-    img = [img.to(device)]
-    targets = {k: v.to(device) for k, v in targets.items()}
-    prediction = model(img)[0]
-    boxes = prediction['boxes']
-    labels = ['pred_(' + dataset.get_class_name(lab) + ')' for lab in prediction['labels'].tolist()]
-    colours = ['green'] * len(prediction['boxes'])
-    if show_ground_truth:
-        boxes = torch.cat((targets['boxes'], boxes), dim=0)
-        labels = ['true_(' + dataset.get_class_name(lab) + ')' for lab in targets['labels'].tolist()] + labels
-        colours = ['red'] * len(targets['boxes']) + colours
-    image255 = Image.open(os.path.join(dataset.root, 'images', img_name)).convert('RGB')
-    image255 = F.pil_to_tensor(image255)
-    res = draw_bounding_boxes(image255, boxes, labels, colours, width=3)
-    return F.to_pil_image(res)
-
-
-@torch.inference_mode()
-def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, output_dir=None, plot_pc=False,
-             save_to_file=None):
+def evaluate(model, loader, device, epoch, n_epochs, iou_thresh=0.5, log_every=None, save_to_file=None):
     """Evaluate the model on a test set. Produces an optional precision-recall plot"""
     model.eval()
 
@@ -115,20 +76,12 @@ def evaluate(model, loader, device, epoch, iou_thresh=0.5, log_every=None, outpu
         if log_every and i % log_every == 0:
             logging.info(f"Test [{i}/{len(loader)}]")
 
-    AP_res, IoU_res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
-                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
-    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU']}), "
-                 + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in IoU_res.items() if key != 'mIoU']))
-    if plot_pc:
-        axes = evaluator.plot_precision_recall(interpolate=True)
-        plt.savefig(os.path.join(output_dir, f"precision_recall_e{epoch}.png"), dpi=300)
+    ap_res, iou_res = evaluator.summarise(method="101")
+    utils.log_summary(ap_res, iou_res, iou_thresh, epoch, n_epochs)
     if save_to_file:
         joblib.dump(evaluator, save_to_file)
         logging.info(f"Saved evaluator object to file {save_to_file}")
-    return AP_res, IoU_res
+    return ap_res, iou_res
 
 
 def selective_search_roi(image, resize_height=250, quality=False):
@@ -149,35 +102,35 @@ def selective_search_roi(image, resize_height=250, quality=False):
 
 
 def get_detections_ss(image, resize_height=250):
-    """Calls the selective search function. Exists for backward compatability."""
+    """Calls the selective search function. Provided for backward compatability with sliding window."""
     bboxes = selective_search_roi(image, resize_height=resize_height)
+    # Filter out close-to-degenerate bboxes
     bboxes = bboxes[(bboxes[:, 2] > 3) & (bboxes[:, 3] > 3)]
     return bboxes
 
 
-def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3),
-                   visualise=False):
+def get_detections(clf, feature_extractor, image, downscale=1.25, min_w=(50, 50, 3), step_size=(20, 20, 3)):
     """DEPRECATED. Use get_detections_ss instead."""
     warnings.warn("Use get_detections_ss instead", DeprecationWarning)
     total = 0
     n_detect = 0
-    detections = {cl: [] for cl in svm.classes_}
-    confidence = {cl: [] for cl in svm.classes_}
+    detections = {cl: [] for cl in clf.classes_}
+    confidence = {cl: [] for cl in clf.classes_}
 
     image = np.transpose(image.numpy(), (1, 2, 0))
 
     scale = 0
-    for im_scaled in pyramid_gaussian(image, downscale=downscale, multichannel=True):
-        curr_detections = {cl: [] for cl in svm.classes_}
-        curr_confidence = {cl: [] for cl in svm.classes_}
+    for im_scaled in pyramid_gaussian(image, downscale=downscale, channel_axis=-1):
+        curr_detections = {cl: [] for cl in clf.classes_}
+        curr_confidence = {cl: [] for cl in clf.classes_}
         scale_factor = downscale ** scale
 
-        # If the width or height of the scaled image is less than
-        # the width or height of the window, then end the iterations.
+        # Stop if sliding window is larger than image
         if im_scaled.shape[0] < min_w[0] or im_scaled.shape[1] < min_w[1]:
             break
         for x, y, window in utils.sliding_window(im_scaled, min_w, step_size):
-            pred, conf = get_classification(svm, feature_extractor, window)
+            fd = feature_extractor.extract(window).reshape(1, -1)
+            pred, conf = get_classification(clf, fd)
             total += 1
             if pred > 0:
                 n_detect += 1
@@ -189,7 +142,7 @@ def get_detections(svm, feature_extractor, image, downscale=1.25, min_w=(50, 50,
                 curr_detections[pred[0]].append(
                     [x, y, x + min_w[0], y + min_w[1]])
                 curr_confidence[pred[0]].append(conf)
-        # Move the the next scale
+        # Move the next scale
         scale += 1
 
     return detections, confidence
@@ -205,7 +158,7 @@ def get_classification(clf, sample):
     return pred, conf
 
 
-def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=None):
+def get_predictions(obj_clf, feature_extractor, image, ss_height=250):
     """Get bounding box classifications from an image."""
     if isinstance(image, PIL.Image.Image):
         image = np.array(image)
@@ -215,11 +168,9 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
     confidence = {cl: [] for cl in obj_clf.classes_}
     for (x, y, w, h) in bboxes:
         window = image[y:y + h, x:x + w]
-            
-        fd = feature_extractor.extract(window).reshape(1, -1)
 
-        if bg_clf and bg_clf.predict(fd) == 0:
-            continue
+        # Extract feature descriptor
+        fd = feature_extractor.extract(window).reshape(1, -1)
         pred, conf = get_classification(obj_clf, fd)
         if pred[0] > 0 and conf > 0:
             detections[pred[0]].append([x, y, x + w, y + h])
@@ -241,8 +192,7 @@ def get_predictions(obj_clf, feature_extractor, image, ss_height=250, bg_clf=Non
     return predictions
 
 
-def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, output_dir=None, plot_pc=False,
-                        cpus=1, save_to_file=None):
+def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_height=250, cpus=1, save_to_file=None):
     """Evaluates a classical classifier on a test set. Supports parallel execution."""
     evaluator = evaluation.FathomNetEvaluator(dataset=dataset, device='cpu', iou_thresh=iou_thresh)
     logging.info(f"SVM has classes {clf.classes_}")
@@ -254,20 +204,12 @@ def evaluate_classifier(clf, feature_extractor, dataset, iou_thresh=0.5, ss_heig
     for targets, predictions, shape in prediction_list:
         evaluator.update(targets, predictions, *shape)
 
-    AP_res, IoU_res = evaluator.summarise(method="101")
-    logging.info(f"Summary (Average Precision @ {iou_thresh}): mAP={AP_res['mAP']:.3f}, "
-                 + ", ".join([f"{key}={val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in AP_res.items() if key != 'mAP']))
-    logging.info(f"Summary (IoU): mIoU=({IoU_res['mIoU']}), "
-                 + ", ".join([f"{key}=({val}" if not isinstance(val, ZeroDivisionError)
-                              else f"{key}={val}" for key, val in IoU_res.items() if key != 'mIoU']))
-    if plot_pc:
-        axes = evaluator.plot_precision_recall(interpolate=True)
-        plt.savefig(os.path.join(output_dir, f"precision_recall_svm.png"), dpi=300)
+    ap_res, iou_res = evaluator.summarise(method="101")
+    utils.log_summary(ap_res, iou_res, iou_thresh)
     if save_to_file:
         joblib.dump(evaluator, save_to_file)
         logging.info(f"Saved evaluator object to file {save_to_file}")
-    return AP_res, IoU_res
+    return ap_res, iou_res
 
 
 def mine_hard_negatives(clf, feature_extractor, dataset, iou_thresh=0.5, max_per_img=None, cpus=1):

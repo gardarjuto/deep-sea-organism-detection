@@ -44,23 +44,33 @@ def get_args_parser(add_help=True):
     parser.add_argument("--n-trials", type=int, help="number of optimization trials")
     parser.add_argument("--study-name", type=str, help="name of optimization study")
 
+    parser.add_argument("--pca-components", type=int, default=600, help="number of PCA components")
+    parser.add_argument("--rbf-components", type=int, default=200,
+                        help="number of samples for computing the RBF kernel")
+
+    parser.add_argument("--study-name", type=str, help="name of optimization study")
+
     parser.add_argument("--cached-path", type=str, help="path to cached descriptors and labels")
     return parser
 
 
 class Objective(object):
-    def __init__(self, val_dataset, n_cpus, feature_extractor, descriptors, labels):
+    def __init__(self, val_dataset, n_cpus, feature_extractor, descriptors, labels, pca_components, rbf_components,
+                 iou_thresh):
         # Hold this implementation specific arguments as the fields of the class.
         self.val_dataset = val_dataset
         self.n_cpus = n_cpus
         self.feature_extractor = feature_extractor
         self.descriptors = descriptors
         self.labels = labels
+        self.pca_components = pca_components
+        self.rbf_components = rbf_components
+        self.iou_thresh = iou_thresh
 
     def __call__(self, trial):
         # Train SVM
-        pca_components = 300
-        rbf_components = 2000
+        pca_components = self.pca_components
+        rbf_components = self.rbf_components
         alpha = trial.suggest_float('sgd_alpha', 1e-12, 1e-2, log=True)
         gamma = trial.suggest_float('rbf_gamma', 1e-8, 0.1, log=True)
         clf = Pipeline(steps=[('scaler', StandardScaler()),
@@ -75,7 +85,9 @@ class Objective(object):
 
         # Evaluate
         result = trainingtools.evaluate_classifier(clf, feature_extractor=self.feature_extractor,
-                                                   dataset=self.val_dataset, plot_pc=False, cpus=self.n_cpus)
+                                                   dataset=self.val_dataset,
+                                                   iou_thresh=self.iou_thresh,
+                                                   cpus=self.n_cpus)
 
         return result['mAP'] if not np.isnan(result['mAP']) else 0.0
 
@@ -127,7 +139,14 @@ def main(args):
 
     logging.info(f"Training on {len(descriptors)} samples with {len(descriptors[0])} dimensions")
 
-    objective = Objective(val_dataset, args.n_cpus, feature_extractor, descriptors, labels)
+    objective = Objective(val_dataset,
+                          args.n_cpus,
+                          feature_extractor,
+                          descriptors,
+                          labels,
+                          args.pca_components,
+                          args.rbf_components,
+                          args.iou_thresh)
 
     with open(args.db_login, "r") as f:
         login = json.load(f)

@@ -24,7 +24,6 @@ class FathomNetEvaluator:
         self.updates = []
 
     def update(self, targets, predictions, im_width, im_height):
-        assert im_width > im_height
         target_boxes_all = targets['boxes']
         target_labels_all = targets['labels']
         pred_boxes_all = predictions['boxes']
@@ -95,9 +94,8 @@ class FathomNetEvaluator:
     def iou_for_class(self, cls):
         if sum(self.metrics_by_class[cls]['union_area']) == 0:
             raise ZeroDivisionError("No instances or predictions in test set")
-        iou1 = sum(self.metrics_by_class[cls]['intersection_area']) / sum(self.metrics_by_class[cls]['union_area'])
-        iou2 = np.nanmean(np.array(self.metrics_by_class[cls]['intersection_area']) / np.array(self.metrics_by_class[cls]['union_area']))
-        return iou1, iou2
+        iou = sum(self.metrics_by_class[cls]['intersection_area']) / sum(self.metrics_by_class[cls]['union_area'])
+        return iou
 
     def summarise(self, method="101"):
         AP_res = {}
@@ -129,15 +127,14 @@ class FathomNetEvaluator:
             AP_res[self.dataset.get_class_name(cls)] = AP
         AP_res['mAP'] = np.mean(list(val if not isinstance(val, ZeroDivisionError) and np.isfinite(val) else 0.0
                                      for val in AP_res.values()))
-        IoU_res['mIoU'] = (np.mean(list(val[0] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError))),
-                           np.mean(list(val[1] for val in IoU_res.values() if not isinstance(val, ZeroDivisionError))))
+        IoU_res['mIoU'] = np.mean(list(val for val in IoU_res.values() if not isinstance(val, ZeroDivisionError)))
         return AP_res, IoU_res
 
     def plot_precision_recall(self, interpolate=True):
         """Returns a grid with one plot for each class"""
         nrows = int(np.sqrt(len(self.metrics_by_class)))
         ncols = int(np.ceil(len(self.metrics_by_class) / nrows))
-        fig, axes = plt.subplots(nrows, ncols, figsize=(15, 15), sharex=True, sharey=True)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(20, 20), sharex=True, sharey=True)
 
         for ax, cls in zip(axes.ravel() if nrows > 1 or ncols > 1 else [axes], self.metrics_by_class):
             try:

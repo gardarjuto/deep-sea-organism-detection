@@ -21,32 +21,48 @@ import logging
 
 
 def get_args_parser(add_help=True):
-    parser = argparse.ArgumentParser(description="Marine Organism Object Detection Training", add_help=add_help)
+    parser = argparse.ArgumentParser(description="Marine Organism Object Detection Training using HOG+SVM",
+                                     add_help=add_help)
 
-    parser.add_argument("--train-path", default="data/train", type=str, help="path to training dataset")
-    parser.add_argument("--test-path", default="data/test", type=str, help="path to test dataset")
-    parser.add_argument("--class-file", default="classes.json", type=str, help="path to class definitions")
-    parser.add_argument("--load-model", default=None, type=str, help="path if loading pretrained model")
+    parser.add_argument("--train-path", default="data/train", type=str,
+                        help="path to training dataset")
+    parser.add_argument("--test-path", default="data/test", type=str,
+                        help="path to test dataset")
+    parser.add_argument("--class-file", default="classes.json", type=str,
+                        help="path to class definitions")
+    parser.add_argument("--load-model", default=None, type=str,
+                        help="path if loading pretrained model")
     parser.add_argument("--val-split", default=0.2, type=float,
                         help="proportion of training dataset to use for validation")
-    parser.add_argument("--iou-thresh", default=0.5, type=float, help="IoU threshold for evaluation")
+    parser.add_argument("--iou-thresh", default=0.5, type=float,
+                        help="IoU threshold for evaluation")
     parser.add_argument("--log-file", "--lf", default=None, type=str,
                         help="path to file for writing logs. If omitted, writes to stdout")
-    parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"))
+    parser.add_argument("--log-level", default="ERROR", choices=("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"),
+                        help="level of logging messages")
     parser.add_argument("--seed", type=int, default=None,
                         help="Fix random generator seed. Setting this forces a deterministic run")
-    parser.add_argument("--profile", action="store_true", help="profile the code and write to file 'restats'")
+    parser.add_argument("--profile", action="store_true",
+                        help="profile the code and write to file 'restats'")
+    parser.add_argument("--ss-height", type=int,
+                        help="resize images to this height before applying Selective Search")
 
     # HOG parameters
-    parser.add_argument("--hog-bins", default=9, type=int, help="number or bins for orientation binning in HOG")
-    parser.add_argument("--ppc", default=(8, 8), nargs="+", type=int, help="pixels per cell in HOG")
-    parser.add_argument("--cpb", default=(2, 2), nargs="+", type=int, help="cells per block in HOG")
-    parser.add_argument("--block-norm", default="L2-Hys", type=str, help="block norm in HOG")
-    parser.add_argument("--gamma-corr", action="store_true", help="use gamma correction in HOG")
+    parser.add_argument("--hog-bins", default=9, type=int,
+                        help="number or bins for orientation binning in HOG")
+    parser.add_argument("--ppc", default=(8, 8), nargs="+", type=int,
+                        help="pixels per cell in HOG")
+    parser.add_argument("--cpb", default=(2, 2), nargs="+", type=int,
+                        help="cells per block in HOG")
+    parser.add_argument("--block-norm", default="L2-Hys", type=str,
+                        help="block norm in HOG")
+    parser.add_argument("--gamma-corr", action="store_true",
+                        help="use gamma correction in HOG")
     parser.add_argument("--no-gamma-corr", action="store_false", dest="gamma-corr",
                         help="don't use gamma correction in HOG")
     parser.set_defaults(gamma_corr=True)
-    parser.add_argument("--hog-dim", default=(128, 128), nargs="+", type=int, help="input dimensions for HOG extractor")
+    parser.add_argument("--hog-dim", default=(128, 128), nargs="+", type=int,
+                        help="input dimensions for HOG extractor")
 
     # Sliding window parameters
     parser.add_argument("--downscale-factor", default=1.25, type=float,
@@ -66,15 +82,20 @@ def get_args_parser(add_help=True):
 
 
     # Evaluation parameters
-    parser.add_argument("--evaluate-only", action="store_true", help="only evaluate model")
-    parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
-    parser.add_argument("--plot-pc", action="store_true", help="plot precision recall curves")
+    parser.add_argument("--evaluate-only", action="store_true",
+                        help="only evaluate model")
+    parser.add_argument("--output-dir", default=".", type=str,
+                        help="path to save outputs")
+    parser.add_argument("--plot-pc", action="store_true",
+                        help="plot precision recall curves")
 
     # Hard negative mining parameters
-    parser.add_argument("--neg-per-img", default=50, type=int, help="how many hard negatives to mine from each image")
+    parser.add_argument("--neg-per-img", default=50, type=int,
+                        help="how many hard negatives to mine from each image")
 
     # Multicore parameters
-    parser.add_argument("--n-cpus", default=1, type=int, help="number of cores to use for parallel operations")
+    parser.add_argument("--n-cpus", default=1, type=int,
+                        help="number of cores to use for parallel operations")
     return parser
 
 
@@ -163,8 +184,9 @@ def main(args):
     logging.info(f"Evaluating classifier on {'test' if use_test else 'validation'} dataset")
     trainingtools.evaluate_classifier(clf, feature_extractor=feature_extractor,
                                       dataset=test_dataset if use_test else val_dataset,
-                                      iou_thresh=args.iou_thresh, output_dir=args.output_dir,
-                                      plot_pc=args.plot_pc, cpus=args.n_cpus,
+                                      iou_thresh=args.iou_thresh,
+                                      ss_height=args.ss_height,
+                                      cpus=args.n_cpus,
                                       save_to_file=os.path.join(args.output_dir, "evaluator.pickle"))
 
 

@@ -1,17 +1,12 @@
 import argparse
 import json
 import os
-import random
-
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
 from detection import models, utils, datasets
 from detection import trainingtools
-from detection.datasets import FathomNetDataset
 import logging
 
 
@@ -44,11 +39,11 @@ def get_args_parser(add_help=True):
     )
     parser.add_argument(
         "--lr", default=0.02, type=float,
-        help="initial learning rate, 0.02 is the default value for training on 8 gpus and 2 images_per_gpu",
+        help="initial learning rate",
     )
-    parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
+    parser.add_argument("--momentum", default=0.9, type=float, help="momentum")
     parser.add_argument(
-        "--wd", "--weight-decay", default=1e-4, type=float, metavar="W", help="weight decay (default: 1e-4)",
+        "--wd", "--weight-decay", default=1e-4, type=float, help="weight decay",
         dest="weight_decay",
     )
     parser.add_argument(
@@ -56,10 +51,10 @@ def get_args_parser(add_help=True):
         default=[16, 22],
         nargs="+",
         type=int,
-        help="decrease lr every step-size epochs (multisteplr scheduler only)",
+        help="decrease lr every step-size epochs",
     )
     parser.add_argument(
-        "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma (multisteplr scheduler only)"
+        "--lr-gamma", default=0.1, type=float, help="decrease lr by a factor of lr-gamma"
     )
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
     parser.add_argument("--sync-bn", dest="sync_bn", help="Use sync batch norm", action="store_true")
@@ -81,8 +76,6 @@ def get_args_parser(add_help=True):
 
 
 def main(args):
-    # TODO: Check arguments
-
     utils.initialise_distributed(args)
     utils.initialise_logging(args)
     logging.info("Started")
@@ -115,7 +108,6 @@ def main(args):
         else:
             train_sampler = torch.utils.data.RandomSampler(train_dataset)
         val_sampler = torch.utils.data.SequentialSampler(val_dataset)
-
         train_batch_sampler = torch.utils.data.BatchSampler(train_sampler, args.batch_size, drop_last=True)
 
         train_loader = DataLoader(train_dataset, batch_sampler=train_batch_sampler, num_workers=args.workers,
@@ -143,11 +135,13 @@ def main(args):
         model = nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], output_device=args.gpu)
         model_without_ddp = model.module
 
-    # Observe that all parameters are being optimized
+    # Create optimizer
+    logging.info("Creating optimiser")
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 
     # Create scheduler
+    logging.info("Creating scheduler")
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=args.lr_steps, gamma=args.lr_gamma)
 
     if args.checkpoint:
@@ -163,6 +157,7 @@ def main(args):
         # Evaluate and then quit
         if utils.is_master_process():
             use_test = args.test_path is not None
+            logging.info("Evaluating model")
             trainingtools.evaluate(model_without_ddp, loader=test_loader if use_test else val_loader, device=device,
                                    epoch=args.start_epoch - 1, iou_thresh=args.iou_thresh, log_every=args.log_every,
                                    output_dir=args.output_dir, plot_pc=True,
@@ -198,9 +193,12 @@ def main(args):
 
         # Evaluate on the validation data
         if utils.is_master_process():
-            trainingtools.evaluate(model_without_ddp, loader=val_loader, device=device, epoch=epoch,
-                                   iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
-                                   plot_pc=True)
+            trainingtools.evaluate(
+                model_without_ddp, loader=val_loader, device=device,
+                epoch=epoch, n_epochs=args.epochs, iou_thresh=args.iou_thresh,
+                log_every=args.log_every, output_dir=args.output_dir,
+                plot_pc=True
+            )
 
         if args.distributed:
             # Wait while master process saves and evaluates
@@ -208,6 +206,7 @@ def main(args):
 
     if args.test_path is not None:
         if utils.is_master_process():
+            # Perform final evaluation
             trainingtools.evaluate(model_without_ddp, loader=test_loader, device=device, epoch=epoch,
                                    iou_thresh=args.iou_thresh, log_every=args.log_every, output_dir=args.output_dir,
                                    plot_pc=True, save_to_file=os.path.join(args.output_dir, "evaluator.pickle"))
